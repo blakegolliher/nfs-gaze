@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -226,7 +224,7 @@ func monitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, m
 					displayStatsNfsiostat(currentMount, stats, previousMount, showAttr)
 				} else if len(stats) > 0 {
 					// Simple mode - only show if there's activity
-				displayStatsSimple(currentMount, stats, showBandwidth, timestamp)
+					displayStatsSimple(currentMount, stats, showBandwidth, timestamp)
 				}
 			}
 

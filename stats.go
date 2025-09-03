@@ -4,18 +4,13 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
-
-
 
 // parseEvents parses the events line into an NFSEvents struct
 func parseEvents(parts []string) (*NFSEvents, error) {
@@ -159,10 +154,16 @@ func parseMountstats(path string) (map[string]*NFSMount, error) {
 
 		// Parse device line
 		if strings.HasPrefix(line, "device") && strings.Contains(line, "nfs") {
-			parts := strings.Fields(line)
-			if len(parts) >= 8 {
-				serverExport := parts[1]
-				mountPoint := parts[4]
+			lineParts := strings.SplitN(line, " on ", 2)
+			if len(lineParts) != 2 {
+				continue
+			}
+			deviceInfo := strings.Fields(lineParts[0])
+			mountInfo := strings.Fields(lineParts[1])
+
+			if len(deviceInfo) >= 2 && len(mountInfo) >= 1 {
+				serverExport := deviceInfo[1]
+				mountPoint := mountInfo[0]
 
 				// Split server:export
 				serverParts := strings.SplitN(serverExport, ":", 2)
@@ -216,9 +217,9 @@ func parseMountstats(path string) (map[string]*NFSMount, error) {
 					}
 				}
 			} else if strings.Contains(line, ":") && !strings.HasPrefix(line, "RPC") &&
-				      !strings.HasPrefix(line, "xprt") && !strings.HasPrefix(line, "per-op") &&
-				      !strings.HasPrefix(line, "opts") && !strings.HasPrefix(line, "caps") &&
-				      !strings.HasPrefix(line, "sec") {
+			      !strings.HasPrefix(line, "xprt") && !strings.HasPrefix(line, "per-op") &&
+			      !strings.HasPrefix(line, "opts") && !strings.HasPrefix(line, "caps") &&
+			      !strings.HasPrefix(line, "sec") {
 				// Parse operation statistics
 				opParts := strings.SplitN(line, ":", 2)
 				if len(opParts) == 2 {
@@ -403,191 +404,11 @@ func displayStatsSimple(mount *NFSMount, stats []*DeltaStats, showBandwidth bool
 
 		if showBandwidth {
 			mbPerSec := s.KBPerSec / 1024
-			fmt.Printf("%-15s %10.1f %10.3f %10.3f %10.3f %10.2f\n",
+			fmt.Printf("% -15s %10.1f %10.3f %10.3f %10.3f %10.2f\n",
 				s.Operation, s.IOPS, s.AvgRTT, s.AvgExec, mbPerSec, s.KBPerOp)
 		} else {
-			fmt.Printf("%-15s %10.1f %10.3f %10.3f\n",
+			fmt.Printf("% -15s %10.1f %10.3f %10.3f\n",
 				s.Operation, s.IOPS, s.AvgRTT, s.AvgExec)
 		}
 	}
 }
-
-
-
-
-
-// parseOperationsFilter parses the comma-separated list of operations to monitor.
-func parseOperationsFilter(operations string) map[string]bool {
-	var opsFilter map[string]bool
-	if operations != "" {
-		opsFilter = make(map[string]bool)
-		for _, op := range strings.Split(operations, ",") {
-			opsFilter[strings.TrimSpace(op)] = true
-		}
-	}
-	return opsFilter
-}
-
-// getMountsToMonitor determines which mounts to monitor based on user input.
-func getMountsToMonitor(mountPoint string, previousMounts map[string]*NFSMount) []string {
-	var monitorMounts []string
-	if mountPoint != "" {
-		if _, exists := previousMounts[mountPoint]; !exists {
-			log.Fatalf("Mount point %s not found", mountPoint)
-		}
-		monitorMounts = append(monitorMounts, mountPoint)
-	} else {
-		for mp := range previousMounts {
-			monitorMounts = append(monitorMounts, mp)
-		}
-		if len(monitorMounts) == 0 {
-			fmt.Fprintf(os.Stderr, "No NFS mounts found\n")
-			os.Exit(1)
-		}
-	}
-	return monitorMounts
-}
-
-// printInitialSummary prints the initial summary of the monitored mounts.
-func printInitialSummary(nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, operations string, interval time.Duration) {
-	if nfsiostatMode {
-		for _, mp := range monitorMounts {
-			mount := previousMounts[mp]
-			if mount == nil {
-				continue
-			}
-
-			var stats []*DeltaStats
-			mountAgeSec := float64(mount.Age)
-
-			for _, op := range mount.Operations {
-				if op.Ops > 0 {
-					// Apply filter if specified
-					if opsFilter != nil && !opsFilter[op.Name] {
-						continue
-					}
-
-					delta := &DeltaStats{
-						Operation:    op.Name,
-						DeltaOps:     op.Ops,
-						DeltaSent:    op.BytesSent,
-						DeltaRecv:    op.BytesRecv,
-						DeltaBytes:   op.BytesSent + op.BytesRecv,
-						DeltaRTT:     op.RTT,
-						DeltaExec:    op.ExecuteTime,
-						DeltaQueue:   op.QueueTime,
-						DeltaErrors:  op.Errors,
-						DeltaRetrans: op.Timeouts,
-						IOPS:         float64(op.Ops) / mountAgeSec,
-						AvgRTT:       float64(op.RTT) / float64(op.Ops),
-						AvgExec:      float64(op.ExecuteTime) / float64(op.Ops),
-						AvgQueue:     float64(op.QueueTime) / float64(op.Ops),
-						KBPerOp:      float64(op.BytesSent+op.BytesRecv) / float64(op.Ops) / 1024,
-						KBPerSec:     float64(op.BytesSent+op.BytesRecv) / mountAgeSec / 1024,
-					}
-					stats = append(stats, delta)
-				}
-			}
-
-			if len(stats) > 0 {
-				displayStatsNfsiostat(mount, stats, nil, showAttr)
-			}
-		}
-	} else {
-		// Print header for simple mode
-		fmt.Printf("Monitoring NFS mount: %s (%s)\n", monitorMounts[0], previousMounts[monitorMounts[0]].Device)
-		fmt.Printf("Update interval: %v\n", interval)
-		if operations != "" {
-			fmt.Printf("Filtering operations: %s\n", operations)
-		}
-	}
-}
-
-// monitoringLoop is the main monitoring loop of the application.
-func monitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, mountstatsPath string, clearScreen bool, nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, showBandwidth bool, operations string) {
-	// Monitoring loop
-	iteration := 0
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			iteration++
-
-			// Read current stats
-			currentMounts, err := parseMountstats(mountstatsPath)
-			if err != nil {
-				log.Printf("Error reading mountstats: %v", err)
-				continue
-			}
-
-			timestamp := time.Now()
-			duration := interval.Seconds()
-
-			// Clear screen if requested (only for simple mode)
-			if clearScreen && !nfsiostatMode {
-				fmt.Print("\033[H\033[2J")
-				// Reprint header after clearing
-				fmt.Printf("Monitoring NFS mount: %s (%s)\n", monitorMounts[0], currentMounts[monitorMounts[0]].Device)
-				fmt.Printf("Update interval: %v | Time: %s\n", interval, timestamp.Format("15:04:05"))
-				if operations != "" {
-					fmt.Printf("Filtering operations: %s\n", operations)
-				}
-			}
-
-			// Process each monitored mount
-			for _, mp := range monitorMounts {
-				currentMount, exists := currentMounts[mp]
-				if !exists {
-					continue
-				}
-
-				previousMount := previousMounts[mp]
-				if previousMount == nil {
-					continue
-				}
-
-				// Calculate deltas
-				var stats []*DeltaStats
-
-				for opName, currentOp := range currentMount.Operations {
-					// Apply filter if specified
-					if opsFilter != nil && !opsFilter[opName] {
-						continue
-					}
-
-					previousOp := previousMount.Operations[opName]
-					if previousOp != nil {
-						delta := calculateDelta(previousOp, currentOp, duration)
-						if delta != nil && delta.DeltaOps > 0 {
-							stats = append(stats, delta)
-						}
-					}
-				}
-
-				// Display results
-				if nfsiostatMode {
-					// Always display in nfsiostat mode (even with no activity)
-					displayStatsNfsiostat(currentMount, stats, previousMount, showAttr)
-				} else if len(stats) > 0 {
-					// Simple mode - only show if there's activity
-					displayStatsSimple(currentMount, stats, showBandwidth, timestamp)
-				}
-			}
-
-			// Update previous stats
-			previousMounts = currentMounts
-
-			// Check iteration count
-			if count > 0 && iteration >= count {
-				return
-			}
-
-		case <-sigChan:
-			fmt.Println("\nCaught ^C... exiting")
-			return
-		}
-	}
-}
-
