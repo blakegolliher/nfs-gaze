@@ -3,11 +3,10 @@
 package main
 
 import (
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
-	"log"
 )
 
 // main is the entry point of the application.
