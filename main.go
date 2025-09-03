@@ -1,11 +1,11 @@
-//go:build linux
-
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"nfs-gazer/internal"
@@ -13,6 +13,10 @@ import (
 
 // main is the entry point of the application.
 func main() {
+	if runtime.GOOS != "linux" {
+		fmt.Println("This tool is only supported on Linux.")
+		os.Exit(1)
+	}
 	mountPoint, operations, interval, count, showAttr, showBandwidth, nfsiostatMode, clearScreen, mountstatsPath := internal.InitFlags()
 
 	opsFilter := internal.ParseOperationsFilter(*operations)
