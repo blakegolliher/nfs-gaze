@@ -101,14 +101,7 @@ WRITE            67.8      3.287         2.951          8.542   128.00
 ```
 
 ### nfsiostat Format
-Provides detailed per-operation statistics including errors and retransmissions:
-```
-ops/s            rpc bklog
-193.000               0.000
-
-read:       ops/s         kB/s        kB/op      retrans  avg RTT (ms)  avg exe (ms)  avg queue (ms)    errors
-           125.300     16029.440      128.000     0 (0.0%)        2.145        1.823           0.322     0 (0.0%)
-```
+Provides detailed per-operation statistics including errors and retransmissions.
 
 ## Examples
 
