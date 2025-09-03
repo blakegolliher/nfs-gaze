@@ -1,16 +1,6 @@
 # nfs-gaze
 
-A command-line tool to monitor NFS client I/O statistics on Linux in real-time. Track NFS performance metrics including IOPS, bandwidth, latency, and operation-specific statistics with support for both live monitoring and nfsiostat-compatible output.
-
-## Features
-
-- **Real-time NFS monitoring** - Live statistics with configurable update intervals
-- **Multiple output formats** - Simple tabular view or nfsiostat-compatible format
-- **Operation filtering** - Monitor specific NFS operations (READ, WRITE, GETATTR, etc.)
-- **Performance metrics** - IOPS, bandwidth (MB/s, KB/op), latency (RTT, execution time)
-- **Attribute cache stats** - VFS operations and cache invalidation statistics
-- **Flexible targeting** - Monitor all NFS mounts or specific mount points
-- **Screen clearing** - Clean display updates for continuous monitoring
+A command-line tool to monitor NFS client I/O statistics on Linux in real-time. Track NFS performance metrics including IOPS, bandwidth, latency, and operation-specific statistics.
 
 ## Usage
 
@@ -23,29 +13,6 @@ A command-line tool to monitor NFS client I/O statistics on Linux in real-time. 
 # Monitor a specific mount point
 ./nfs-gaze -m /mnt/nfs
 
-# Monitor with 5-second intervals
-./nfs-gaze -i 5s
-
-# Run for 10 iterations then exit
-./nfs-gaze -c 10
-```
-
-### Output Formats
-
-```bash
-# Use nfsiostat-compatible format (detailed)
-./nfs-gaze --nfsiostat
-
-# Simple format with bandwidth statistics
-./nfs-gaze -m /mnt/nfs -bw
-
-# Show attribute cache statistics (nfsiostat mode)
-./nfs-gaze --nfsiostat --attr
-```
-
-### Operation Filtering
-
-```bash
 # Monitor only READ and WRITE operations
 ./nfs-gaze -m /mnt/nfs -ops READ,WRITE
 
@@ -54,6 +21,17 @@ A command-line tool to monitor NFS client I/O statistics on Linux in real-time. 
 
 # Combine with bandwidth stats
 ./nfs-gaze -ops READ,WRITE -bw
+
+```
+
+### Output Formats
+
+```bash
+# Simple format with bandwidth statistics
+./nfs-gaze -m /mnt/nfs -bw
+
+# Show attribute cache statistics (nfsiostat mode)
+./nfs-gaze --nfsiostat --attr
 ```
 
 ### Display Options
@@ -61,9 +39,6 @@ A command-line tool to monitor NFS client I/O statistics on Linux in real-time. 
 ```bash
 # Clear screen between updates for clean display
 ./nfs-gaze -m /mnt/nfs --clear
-
-# Monitor with custom mountstats file
-./nfs-gaze -f /proc/mountstats
 
 # Positional arguments (legacy compatibility)
 ./nfs-gaze /mnt/nfs 2 10  # mount point, interval (seconds), count
@@ -77,7 +52,6 @@ A command-line tool to monitor NFS client I/O statistics on Linux in real-time. 
 | `-ops <list>` | Comma-separated operations to monitor | All operations |
 | `-i <duration>` | Update interval | 1s |
 | `-c <count>` | Number of iterations (0 = infinite) | 0 |
-| `--nfsiostat` | Use nfsiostat output format | false |
 | `-bw` | Show bandwidth statistics | false |
 | `--attr` | Show attribute cache statistics | false |
 | `--clear` | Clear screen between iterations | false |
@@ -100,9 +74,6 @@ READ            125.2      2.145         1.823         15.654   128.00
 WRITE            67.8      3.287         2.951          8.542   128.00
 ```
 
-### nfsiostat Format
-Provides detailed per-operation statistics including errors and retransmissions.
-
 ## Examples
 
 ### Monitor High-Traffic NFS Mount
@@ -122,13 +93,6 @@ Provides detailed per-operation statistics including errors and retransmissions.
 # Monitor only data I/O with bandwidth
 ./nfs-gaze -ops READ,WRITE -bw --clear
 ```
-
-### Batch Monitoring
-```bash
-# Run 60 iterations (2 minutes at 2s intervals)
-./nfs-gaze -i 2s -c 60 > nfs-stats.log
-```
-
 ## Testing
 
 To run the tests, use the following command:
