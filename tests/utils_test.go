@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package tests
 
 import (
 	"flag"
@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	internal "nfs-gazer/internal"
 )
 
 func TestParseOperationsFilter(t *testing.T) {
@@ -45,17 +47,17 @@ func TestParseOperationsFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parseOperationsFilter(tt.operations)
+			result := internal.ParseOperationsFilter(tt.operations)
 			
 			if !reflect.DeepEqual(result, tt.expected) {
-				t.Errorf("parseOperationsFilter() = %v, want %v", result, tt.expected)
+				t.Errorf("internal.ParseOperationsFilter() = %v, want %v", result, tt.expected)
 			}
 		})
 	}
 }
 
 func TestGetMountsToMonitor(t *testing.T) {
-	previousMounts := map[string]*NFSMount{
+	previousMounts := map[string]*internal.NFSMount{
 		"/mnt/nfs1": {MountPoint: "/mnt/nfs1", Device: "server1:/export1"},
 		"/mnt/nfs2": {MountPoint: "/mnt/nfs2", Device: "server2:/export2"},
 	}
@@ -63,7 +65,7 @@ func TestGetMountsToMonitor(t *testing.T) {
 	tests := []struct {
 		name           string
 		mountPoint     string
-		previousMounts map[string]*NFSMount
+		previousMounts map[string]*internal.NFSMount
 		expected       []string
 		shouldExit     bool
 	}{
@@ -84,7 +86,7 @@ func TestGetMountsToMonitor(t *testing.T) {
 		{
 			name:           "empty mounts map",
 			mountPoint:     "",
-			previousMounts: map[string]*NFSMount{},
+			previousMounts: map[string]*internal.NFSMount{},
 			expected:       nil,
 			shouldExit:     true,
 		},
@@ -98,12 +100,12 @@ func TestGetMountsToMonitor(t *testing.T) {
 				return
 			}
 
-			result := getMountsToMonitor(tt.mountPoint, tt.previousMounts)
+			result := internal.GetMountsToMonitor(tt.mountPoint, tt.previousMounts)
 			
 			if tt.mountPoint == "" && len(tt.previousMounts) > 0 {
 				// For empty mount point, check that we got all mounts
 				if len(result) != len(tt.previousMounts) {
-					t.Errorf("getMountsToMonitor() returned %d mounts, expected %d", len(result), len(tt.previousMounts))
+					t.Errorf("internal.GetMountsToMonitor() returned %d mounts, expected %d", len(result), len(tt.previousMounts))
 				}
 				// Check that all expected mount points are present
 				mountMap := make(map[string]bool)
@@ -112,12 +114,12 @@ func TestGetMountsToMonitor(t *testing.T) {
 				}
 				for expectedMP := range tt.previousMounts {
 					if !mountMap[expectedMP] {
-						t.Errorf("getMountsToMonitor() missing expected mount point: %s", expectedMP)
+						t.Errorf("internal.GetMountsToMonitor() missing expected mount point: %s", expectedMP)
 					}
 				}
 			} else {
 				if !reflect.DeepEqual(result, tt.expected) {
-					t.Errorf("getMountsToMonitor() = %v, want %v", result, tt.expected)
+					t.Errorf("internal.GetMountsToMonitor() = %v, want %v", result, tt.expected)
 				}
 			}
 		})
@@ -176,7 +178,7 @@ func TestInitFlags(t *testing.T) {
 			flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 			os.Args = tt.args
 
-			mountPoint, operations, interval, count, showAttr, showBandwidth, nfsiostatMode, clearScreen, mountstatsPath := initFlags()
+			mountPoint, operations, interval, count, showAttr, showBandwidth, nfsiostatMode, clearScreen, mountstatsPath := internal.InitFlags()
 
 			if *mountPoint != tt.expected["mountPoint"] {
 				t.Errorf("mountPoint = %v, want %v", *mountPoint, tt.expected["mountPoint"])
@@ -210,11 +212,11 @@ func TestInitFlags(t *testing.T) {
 }
 
 func TestPrintInitialSummary(t *testing.T) {
-	mount := &NFSMount{
+	mount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
 		Age:        3600,
-		Operations: map[string]*NFSOperation{
+		Operations: map[string]*internal.NFSOperation{
 			"READ": {
 				Name:        "READ",
 				Ops:         100,
@@ -225,10 +227,10 @@ func TestPrintInitialSummary(t *testing.T) {
 				QueueTime:   100,
 			},
 		},
-		Events: &NFSEvents{},
+		Events: &internal.NFSEvents{},
 	}
 
-	previousMounts := map[string]*NFSMount{
+	previousMounts := map[string]*internal.NFSMount{
 		"/mnt/nfs": mount,
 	}
 	monitorMounts := []string{"/mnt/nfs"}
@@ -238,20 +240,20 @@ func TestPrintInitialSummary(t *testing.T) {
 	t.Run("nfsiostat mode no panic", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("printInitialSummary() panicked: %v", r)
+				t.Errorf("internal.PrintInitialSummary() panicked: %v", r)
 			}
 		}()
 		
-		printInitialSummary(true, monitorMounts, previousMounts, opsFilter, false, "READ", 1*time.Second)
+		internal.PrintInitialSummary(true, monitorMounts, previousMounts, opsFilter, false, "READ", 1*time.Second)
 	})
 
 	t.Run("simple mode no panic", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("printInitialSummary() panicked: %v", r)
+				t.Errorf("internal.PrintInitialSummary() panicked: %v", r)
 			}
 		}()
 		
-		printInitialSummary(false, monitorMounts, previousMounts, opsFilter, false, "READ", 1*time.Second)
+		internal.PrintInitialSummary(false, monitorMounts, previousMounts, opsFilter, false, "READ", 1*time.Second)
 	})
 }

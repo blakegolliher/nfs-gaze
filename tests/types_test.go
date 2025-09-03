@@ -1,11 +1,15 @@
 //go:build linux
 
-package main
+package tests
 
-import "testing"
+import (
+	"testing"
+
+	internal "nfs-gazer/internal"
+)
 
 func TestNFSOperationCreation(t *testing.T) {
-	op := &NFSOperation{
+	op := &internal.NFSOperation{
 		Name:        "READ",
 		Ops:         100,
 		Ntrans:      95,
@@ -30,7 +34,7 @@ func TestNFSOperationCreation(t *testing.T) {
 }
 
 func TestNFSEventsCreation(t *testing.T) {
-	events := &NFSEvents{
+	events := &internal.NFSEvents{
 		InodeRevalidate:  10,
 		DentryRevalidate: 5,
 		VFSOpen:          20,
@@ -46,14 +50,14 @@ func TestNFSEventsCreation(t *testing.T) {
 }
 
 func TestNFSMountCreation(t *testing.T) {
-	mount := &NFSMount{
+	mount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
 		Server:     "server",
 		Export:     "/export",
 		Age:        3600,
-		Operations: make(map[string]*NFSOperation),
-		Events:     &NFSEvents{},
+		Operations: make(map[string]*internal.NFSOperation),
+		Events:     &internal.NFSEvents{},
 		BytesRead:  1048576,
 		BytesWrite: 524288,
 	}
@@ -70,7 +74,7 @@ func TestNFSMountCreation(t *testing.T) {
 }
 
 func TestDeltaStatsCreation(t *testing.T) {
-	delta := &DeltaStats{
+	delta := &internal.DeltaStats{
 		Operation:  "WRITE",
 		DeltaOps:   50,
 		DeltaBytes: 2048,

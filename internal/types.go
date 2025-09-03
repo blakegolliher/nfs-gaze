@@ -1,4 +1,4 @@
-package main
+package internal
 
 // NFSOperation holds statistics for a single NFS operation
 type NFSOperation struct {

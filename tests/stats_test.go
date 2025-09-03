@@ -1,17 +1,19 @@
 //go:build linux
 
-package main
+package tests
 
 import (
 	"testing"
 	"time"
+
+	internal "nfs-gazer/internal"
 )
 
 func TestParseEvents(t *testing.T) {
 	tests := []struct {
 		name     string
 		parts    []string
-		expected *NFSEvents
+		expected *internal.NFSEvents
 		wantErr  bool
 	}{
 		{
@@ -21,7 +23,7 @@ func TestParseEvents(t *testing.T) {
 				"11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
 				"21", "22", "23", "24", "25", "26", "27",
 			},
-			expected: &NFSEvents{
+			expected: &internal.NFSEvents{
 				InodeRevalidate:  1,
 				DentryRevalidate: 2,
 				DataInvalidate:   3,
@@ -55,7 +57,7 @@ func TestParseEvents(t *testing.T) {
 		{
 			name:     "insufficient parts",
 			parts:    []string{"1", "2", "3"},
-			expected: &NFSEvents{},
+			expected: &internal.NFSEvents{},
 			wantErr:  true,
 		},
 		{
@@ -65,7 +67,7 @@ func TestParseEvents(t *testing.T) {
 				"11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
 				"21", "22", "23", "24", "25", "26", "27",
 			},
-			expected: &NFSEvents{
+			expected: &internal.NFSEvents{
 				InodeRevalidate:  1,
 				DentryRevalidate: 2,
 				DataInvalidate:   3,
@@ -110,32 +112,32 @@ func TestParseEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseEvents(tt.parts)
+			result, err := internal.ParseEvents(tt.parts)
 			
 			if tt.wantErr && err == nil {
-				t.Errorf("parseEvents() expected error but got none")
+				t.Errorf("internal.ParseEvents() expected error but got none")
 				return
 			}
 			if !tt.wantErr && err != nil {
-				t.Errorf("parseEvents() unexpected error: %v", err)
+				t.Errorf("internal.ParseEvents() unexpected error: %v", err)
 				return
 			}
 			
 			if tt.expected == nil {
 				if result != nil {
-					t.Errorf("parseEvents() expected nil result but got: %v", result)
+					t.Errorf("internal.ParseEvents() expected nil result but got: %v", result)
 				}
 				return
 			}
 
 			if result.InodeRevalidate != tt.expected.InodeRevalidate {
-				t.Errorf("parseEvents() InodeRevalidate = %v, want %v", result.InodeRevalidate, tt.expected.InodeRevalidate)
+				t.Errorf("internal.ParseEvents() InodeRevalidate = %v, want %v", result.InodeRevalidate, tt.expected.InodeRevalidate)
 			}
 			if result.VFSOpen != tt.expected.VFSOpen {
-				t.Errorf("parseEvents() VFSOpen = %v, want %v", result.VFSOpen, tt.expected.VFSOpen)
+				t.Errorf("internal.ParseEvents() VFSOpen = %v, want %v", result.VFSOpen, tt.expected.VFSOpen)
 			}
 			if result.PNFSRead != tt.expected.PNFSRead {
-				t.Errorf("parseEvents() PNFSRead = %v, want %v", result.PNFSRead, tt.expected.PNFSRead)
+				t.Errorf("internal.ParseEvents() PNFSRead = %v, want %v", result.PNFSRead, tt.expected.PNFSRead)
 			}
 		})
 	}
@@ -144,14 +146,14 @@ func TestParseEvents(t *testing.T) {
 func TestCalculateDelta(t *testing.T) {
 	tests := []struct {
 		name     string
-		oldOp    *NFSOperation
-		newOp    *NFSOperation
+		oldOp    *internal.NFSOperation
+		newOp    *internal.NFSOperation
 		duration float64
-		expected *DeltaStats
+		expected *internal.DeltaStats
 	}{
 		{
 			name: "valid delta calculation",
-			oldOp: &NFSOperation{
+			oldOp: &internal.NFSOperation{
 				Name:        "READ",
 				Ops:         100,
 				BytesSent:   1000,
@@ -162,7 +164,7 @@ func TestCalculateDelta(t *testing.T) {
 				Errors:      1,
 				Timeouts:    2,
 			},
-			newOp: &NFSOperation{
+			newOp: &internal.NFSOperation{
 				Name:        "READ",
 				Ops:         150,
 				BytesSent:   1500,
@@ -174,7 +176,7 @@ func TestCalculateDelta(t *testing.T) {
 				Timeouts:    4,
 			},
 			duration: 1.0,
-			expected: &DeltaStats{
+			expected: &internal.DeltaStats{
 				Operation:    "READ",
 				DeltaOps:     50,
 				DeltaSent:    500,
@@ -196,29 +198,29 @@ func TestCalculateDelta(t *testing.T) {
 		{
 			name:     "nil old operation",
 			oldOp:    nil,
-			newOp:    &NFSOperation{Name: "READ", Ops: 50},
+			newOp:    &internal.NFSOperation{Name: "READ", Ops: 50},
 			duration: 1.0,
 			expected: nil,
 		},
 		{
 			name:     "nil new operation",
-			oldOp:    &NFSOperation{Name: "READ", Ops: 50},
+			oldOp:    &internal.NFSOperation{Name: "READ", Ops: 50},
 			newOp:    nil,
 			duration: 1.0,
 			expected: nil,
 		},
 		{
 			name: "no operation increase",
-			oldOp: &NFSOperation{
+			oldOp: &internal.NFSOperation{
 				Name: "READ",
 				Ops:  100,
 			},
-			newOp: &NFSOperation{
+			newOp: &internal.NFSOperation{
 				Name: "READ",
 				Ops:  100,
 			},
 			duration: 1.0,
-			expected: &DeltaStats{
+			expected: &internal.DeltaStats{
 				Operation: "READ",
 				DeltaOps:  0,
 			},
@@ -227,28 +229,28 @@ func TestCalculateDelta(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := calculateDelta(tt.oldOp, tt.newOp, tt.duration)
+			result := internal.CalculateDelta(tt.oldOp, tt.newOp, tt.duration)
 			
 			if tt.expected == nil {
 				if result != nil {
-					t.Errorf("calculateDelta() expected nil but got: %v", result)
+					t.Errorf("internal.CalculateDelta() expected nil but got: %v", result)
 				}
 				return
 			}
 			
 			if result == nil {
-				t.Errorf("calculateDelta() expected result but got nil")
+				t.Errorf("internal.CalculateDelta() expected result but got nil")
 				return
 			}
 
 			if result.Operation != tt.expected.Operation {
-				t.Errorf("calculateDelta() Operation = %v, want %v", result.Operation, tt.expected.Operation)
+				t.Errorf("internal.CalculateDelta() Operation = %v, want %v", result.Operation, tt.expected.Operation)
 			}
 			if result.DeltaOps != tt.expected.DeltaOps {
-				t.Errorf("calculateDelta() DeltaOps = %v, want %v", result.DeltaOps, tt.expected.DeltaOps)
+				t.Errorf("internal.CalculateDelta() DeltaOps = %v, want %v", result.DeltaOps, tt.expected.DeltaOps)
 			}
 			if result.IOPS != tt.expected.IOPS {
-				t.Errorf("calculateDelta() IOPS = %v, want %v", result.IOPS, tt.expected.IOPS)
+				t.Errorf("internal.CalculateDelta() IOPS = %v, want %v", result.IOPS, tt.expected.IOPS)
 			}
 		})
 	}
@@ -257,23 +259,23 @@ func TestCalculateDelta(t *testing.T) {
 func TestParseMountstats(t *testing.T) {
 	// Test that the function handles non-existent files gracefully
 	t.Run("non-existent file", func(t *testing.T) {
-		result, err := parseMountstats("/nonexistent/file")
+		result, err := internal.ParseMountstats("/nonexistent/file")
 		if err == nil {
-			t.Errorf("parseMountstats() expected error for non-existent file")
+			t.Errorf("internal.ParseMountstats() expected error for non-existent file")
 		}
 		if result != nil {
-			t.Errorf("parseMountstats() expected nil result for non-existent file")
+			t.Errorf("internal.ParseMountstats() expected nil result for non-existent file")
 		}
 	})
 }
 
 func TestDisplayStatsNfsiostat(t *testing.T) {
-	mount := &NFSMount{
+	mount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
 	}
 
-	stats := []*DeltaStats{
+	stats := []*internal.DeltaStats{
 		{
 			Operation: "READ",
 			DeltaOps:  50,
@@ -290,23 +292,23 @@ func TestDisplayStatsNfsiostat(t *testing.T) {
 	t.Run("no panic on display", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsNfsiostat() panicked: %v", r)
+				t.Errorf("internal.DisplayStatsNfsiostat() panicked: %v", r)
 			}
 		}()
 		
 		// Capture output would require redirecting stdout
 		// For now, just ensure it doesn't crash
-		displayStatsNfsiostat(mount, stats, nil, false)
+		internal.DisplayStatsNfsiostat(mount, stats, nil, false)
 	})
 }
 
 func TestDisplayStatsSimple(t *testing.T) {
-	mount := &NFSMount{
+	mount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
 	}
 
-	stats := []*DeltaStats{
+	stats := []*internal.DeltaStats{
 		{
 			Operation: "READ",
 			IOPS:      25.0,
@@ -321,12 +323,12 @@ func TestDisplayStatsSimple(t *testing.T) {
 	t.Run("no panic on display", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsSimple() panicked: %v", r)
+				t.Errorf("internal.DisplayStatsSimple() panicked: %v", r)
 			}
 		}()
 		
 		// Capture output would require redirecting stdout
 		// For now, just ensure it doesn't crash
-		displayStatsSimple(mount, stats, false, time.Now())
+		internal.DisplayStatsSimple(mount, stats, false, time.Now())
 	})
 }

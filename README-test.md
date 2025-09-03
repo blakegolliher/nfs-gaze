@@ -71,20 +71,26 @@ The main areas not covered by tests are:
 ### Basic Test Execution
 
 ```bash
-# Run all tests
-go test ./...
+# Run tests in the tests directory (from root directory)
+go test ./tests/
 
 # Run tests with verbose output
-go test ./... -v
+go test ./tests/ -v
+
+# Run all tests including those in subdirectories
+go test ./...
 
 # Run specific test file
-go test -run TestParseEvents
+go test ./tests/ -run TestParseEvents
 ```
 
 ### Coverage Reporting
 
 ```bash
-# Generate coverage report
+# Generate coverage report for tests directory
+go test ./tests/ -coverprofile=coverage.out
+
+# Generate coverage report for all packages
 go test ./... -coverprofile=coverage.out
 
 # View coverage by function
@@ -188,8 +194,11 @@ defer os.Remove(tmpfile.Name())
 The test suite is designed to run in CI/CD environments:
 
 ```bash
-# CI test command
+# CI test command for all packages
 go test ./... -race -coverprofile=coverage.out
+
+# CI test command for tests directory only
+go test ./tests/ -race -coverprofile=coverage.out
 
 # Coverage validation
 go tool cover -func=coverage.out | grep "total:" | awk '{print $3}' | sed 's/%//'

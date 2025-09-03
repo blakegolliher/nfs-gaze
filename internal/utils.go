@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package internal
 
 import (
 	"flag"
@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// initFlags initializes and parses the command-line flags.
-func initFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *bool, *string) {
+// InitFlags initializes and parses the command-line flags.
+func InitFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *bool, *string) {
 	// Command-line flags
 	var (
 		mountPoint     = flag.String("m", "", "Mount point to monitor")
@@ -69,7 +69,7 @@ func initFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *
 }
 
 // parseOperationsFilter parses the comma-separated list of operations to monitor.
-func parseOperationsFilter(operations string) map[string]bool {
+func ParseOperationsFilter(operations string) map[string]bool {
 	var opsFilter map[string]bool
 	if operations != "" {
 		opsFilter = make(map[string]bool)
@@ -81,7 +81,7 @@ func parseOperationsFilter(operations string) map[string]bool {
 }
 
 // getMountsToMonitor determines which mounts to monitor based on user input.
-func getMountsToMonitor(mountPoint string, previousMounts map[string]*NFSMount) []string {
+func GetMountsToMonitor(mountPoint string, previousMounts map[string]*NFSMount) []string {
 	var monitorMounts []string
 	if mountPoint != "" {
 		if _, exists := previousMounts[mountPoint]; !exists {
@@ -101,7 +101,7 @@ func getMountsToMonitor(mountPoint string, previousMounts map[string]*NFSMount) 
 }
 
 // printInitialSummary prints the initial summary of the monitored mounts.
-func printInitialSummary(nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, operations string, interval time.Duration) {
+func PrintInitialSummary(nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, operations string, interval time.Duration) {
 	if nfsiostatMode {
 		for _, mp := range monitorMounts {
 			mount := previousMounts[mp]
@@ -142,7 +142,7 @@ func printInitialSummary(nfsiostatMode bool, monitorMounts []string, previousMou
 			}
 
 			if len(stats) > 0 {
-				displayStatsNfsiostat(mount, stats, nil, showAttr)
+				DisplayStatsNfsiostat(mount, stats, nil, showAttr)
 			}
 		}
 	} else {
@@ -156,7 +156,7 @@ func printInitialSummary(nfsiostatMode bool, monitorMounts []string, previousMou
 }
 
 // monitoringLoop is the main monitoring loop of the application.
-func monitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, mountstatsPath string, clearScreen bool, nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, showBandwidth bool, operations string) {
+func MonitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, mountstatsPath string, clearScreen bool, nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, showBandwidth bool, operations string) {
 	// Monitoring loop
 	iteration := 0
 	ticker := time.NewTicker(interval)
@@ -168,7 +168,7 @@ func monitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, m
 			iteration++
 
 			// Read current stats
-			currentMounts, err := parseMountstats(mountstatsPath)
+			currentMounts, err := ParseMountstats(mountstatsPath)
 			if err != nil {
 				log.Printf("Error reading mountstats: %v", err)
 				continue
@@ -211,7 +211,7 @@ func monitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, m
 
 					previousOp := previousMount.Operations[opName]
 					if previousOp != nil {
-						delta := calculateDelta(previousOp, currentOp, duration)
+						delta := CalculateDelta(previousOp, currentOp, duration)
 						if delta != nil && delta.DeltaOps > 0 {
 							stats = append(stats, delta)
 						}
@@ -221,10 +221,10 @@ func monitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, m
 				// Display results
 				if nfsiostatMode {
 					// Always display in nfsiostat mode (even with no activity)
-					displayStatsNfsiostat(currentMount, stats, previousMount, showAttr)
+					DisplayStatsNfsiostat(currentMount, stats, previousMount, showAttr)
 				} else if len(stats) > 0 {
 					// Simple mode - only show if there's activity
-				displayStatsSimple(currentMount, stats, showBandwidth, timestamp)
+				DisplayStatsSimple(currentMount, stats, showBandwidth, timestamp)
 				}
 			}
 

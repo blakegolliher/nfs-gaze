@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package tests
 
 import (
 	"flag"
@@ -8,9 +8,11 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	internal "nfs-gazer/internal"
 )
 
-// Test parseMountstats with actual mountstats-like data
+// Test internal.ParseMountstats with actual mountstats-like data
 func TestParseMountstatsIntegration(t *testing.T) {
 	// Create a temporary file with sample mountstats data
 	mountstatsData := `device server1:/export1 mounted on /mnt/nfs1 with fstype nfs4 statvers=1.1
@@ -50,22 +52,22 @@ func TestParseMountstatsIntegration(t *testing.T) {
 	}
 
 	// Test parsing the file
-	mounts, err := parseMountstats(tmpfile.Name())
+	mounts, err := internal.ParseMountstats(tmpfile.Name())
 	if err != nil {
-		t.Errorf("parseMountstats() unexpected error: %v", err)
+		t.Errorf("internal.ParseMountstats() unexpected error: %v", err)
 		return
 	}
 
 	// Verify we got the expected number of mounts
 	expectedMounts := 2
 	if len(mounts) != expectedMounts {
-		t.Errorf("parseMountstats() got %d mounts, expected %d", len(mounts), expectedMounts)
+		t.Errorf("internal.ParseMountstats() got %d mounts, expected %d", len(mounts), expectedMounts)
 	}
 
 	// Check first mount
 	mount1, exists := mounts["/mnt/nfs1"]
 	if !exists {
-		t.Error("parseMountstats() missing /mnt/nfs1 mount")
+		t.Error("internal.ParseMountstats() missing /mnt/nfs1 mount")
 		return
 	}
 
@@ -90,7 +92,7 @@ func TestParseMountstatsIntegration(t *testing.T) {
 	// Check second mount
 	mount2, exists := mounts["/mnt/nfs2"]
 	if !exists {
-		t.Error("parseMountstats() missing /mnt/nfs2 mount")
+		t.Error("internal.ParseMountstats() missing /mnt/nfs2 mount")
 		return
 	}
 
@@ -101,7 +103,7 @@ func TestParseMountstatsIntegration(t *testing.T) {
 	// Check operations parsing
 	readOp, exists := mount2.Operations["READ"]
 	if !exists {
-		t.Error("parseMountstats() missing READ operation in mount2")
+		t.Error("internal.ParseMountstats() missing READ operation in mount2")
 		return
 	}
 	if readOp.Ops != 5 {
@@ -113,7 +115,7 @@ func TestParseMountstatsIntegration(t *testing.T) {
 
 	writeOp, exists := mount2.Operations["WRITE"]
 	if !exists {
-		t.Error("parseMountstats() missing WRITE operation in mount2")
+		t.Error("internal.ParseMountstats() missing WRITE operation in mount2")
 		return
 	}
 	if writeOp.Errors != 1 {
@@ -121,7 +123,7 @@ func TestParseMountstatsIntegration(t *testing.T) {
 	}
 }
 
-// Test edge cases for initFlags
+// Test edge cases for internal.InitFlags
 func TestInitFlagsEdgeCases(t *testing.T) {
 	// Save original args and command line
 	oldArgs := os.Args
@@ -136,7 +138,7 @@ func TestInitFlagsEdgeCases(t *testing.T) {
 		flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 		os.Args = []string{"nfs-gaze", "/mnt/test", "5", "10"}
 
-		mountPoint, _, interval, count, _, _, _, _, _ := initFlags()
+		mountPoint, _, interval, count, _, _, _, _, _ := internal.InitFlags()
 
 		if *mountPoint != "/mnt/test" {
 			t.Errorf("mountPoint = %v, want /mnt/test", *mountPoint)
@@ -154,7 +156,7 @@ func TestInitFlagsEdgeCases(t *testing.T) {
 		flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 		os.Args = []string{"nfs-gaze", "-f", "/custom/mountstats"}
 
-		_, _, _, _, _, _, _, _, mountstatsPath := initFlags()
+		_, _, _, _, _, _, _, _, mountstatsPath := internal.InitFlags()
 
 		if *mountstatsPath != "/custom/mountstats" {
 			t.Errorf("mountstatsPath = %v, want /custom/mountstats", *mountstatsPath)
@@ -164,19 +166,19 @@ func TestInitFlagsEdgeCases(t *testing.T) {
 
 // Test DisplayStatsNfsiostat with various scenarios
 func TestDisplayStatsNfsiostatScenarios(t *testing.T) {
-	mount := &NFSMount{
+	mount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
-		Events:     &NFSEvents{VFSOpen: 100, InodeRevalidate: 50, DataInvalidate: 10, AttrInvalidate: 5},
+		Events:     &internal.NFSEvents{VFSOpen: 100, InodeRevalidate: 50, DataInvalidate: 10, AttrInvalidate: 5},
 	}
 
-	previousMount := &NFSMount{
+	previousMount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
-		Events:     &NFSEvents{VFSOpen: 80, InodeRevalidate: 30, DataInvalidate: 8, AttrInvalidate: 2},
+		Events:     &internal.NFSEvents{VFSOpen: 80, InodeRevalidate: 30, DataInvalidate: 8, AttrInvalidate: 2},
 	}
 
-	stats := []*DeltaStats{
+	stats := []*internal.DeltaStats{
 		{
 			Operation:    "READ",
 			DeltaOps:     100,
@@ -194,43 +196,43 @@ func TestDisplayStatsNfsiostatScenarios(t *testing.T) {
 	t.Run("with attribute stats", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsNfsiostat() with attr panicked: %v", r)
+				t.Errorf("internal.DisplayStatsNfsiostat() with attr panicked: %v", r)
 			}
 		}()
 		
-		displayStatsNfsiostat(mount, stats, previousMount, true)
+		internal.DisplayStatsNfsiostat(mount, stats, previousMount, true)
 	})
 
 	t.Run("with empty stats", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsNfsiostat() with empty stats panicked: %v", r)
+				t.Errorf("internal.DisplayStatsNfsiostat() with empty stats panicked: %v", r)
 			}
 		}()
 		
-		displayStatsNfsiostat(mount, []*DeltaStats{}, nil, false)
+		internal.DisplayStatsNfsiostat(mount, []*internal.DeltaStats{}, nil, false)
 	})
 
 	t.Run("with nil stats", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsNfsiostat() with nil stats panicked: %v", r)
+				t.Errorf("internal.DisplayStatsNfsiostat() with nil stats panicked: %v", r)
 			}
 		}()
 		
-		statsWithNil := []*DeltaStats{nil, stats[0]}
-		displayStatsNfsiostat(mount, statsWithNil, nil, false)
+		statsWithNil := []*internal.DeltaStats{nil, stats[0]}
+		internal.DisplayStatsNfsiostat(mount, statsWithNil, nil, false)
 	})
 }
 
 // Test DisplayStatsSimple with various scenarios
 func TestDisplayStatsSimpleScenarios(t *testing.T) {
-	mount := &NFSMount{
+	mount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
 	}
 
-	stats := []*DeltaStats{
+	stats := []*internal.DeltaStats{
 		{
 			Operation: "READ",
 			DeltaOps:  100,
@@ -254,90 +256,90 @@ func TestDisplayStatsSimpleScenarios(t *testing.T) {
 	t.Run("with bandwidth", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsSimple() with bandwidth panicked: %v", r)
+				t.Errorf("internal.DisplayStatsSimple() with bandwidth panicked: %v", r)
 			}
 		}()
 		
-		displayStatsSimple(mount, stats, true, time.Now())
+		internal.DisplayStatsSimple(mount, stats, true, time.Now())
 	})
 
 	t.Run("with nil stats", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsSimple() with nil stats panicked: %v", r)
+				t.Errorf("internal.DisplayStatsSimple() with nil stats panicked: %v", r)
 			}
 		}()
 		
-		statsWithNil := []*DeltaStats{nil, stats[0]}
-		displayStatsSimple(mount, statsWithNil, false, time.Now())
+		statsWithNil := []*internal.DeltaStats{nil, stats[0]}
+		internal.DisplayStatsSimple(mount, statsWithNil, false, time.Now())
 	})
 
 	t.Run("with zero operations", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("displayStatsSimple() with zero ops panicked: %v", r)
+				t.Errorf("internal.DisplayStatsSimple() with zero ops panicked: %v", r)
 			}
 		}()
 		
-		zeroStats := []*DeltaStats{
+		zeroStats := []*internal.DeltaStats{
 			{Operation: "READ", DeltaOps: 0},
 		}
-		displayStatsSimple(mount, zeroStats, false, time.Now())
+		internal.DisplayStatsSimple(mount, zeroStats, false, time.Now())
 	})
 }
 
 // Test PrintInitialSummary edge cases  
 func TestPrintInitialSummaryEdgeCases(t *testing.T) {
 	// Test with zero operations
-	mount := &NFSMount{
+	mount := &internal.NFSMount{
 		Device:     "server:/export",
 		MountPoint: "/mnt/nfs",
 		Age:        3600,
-		Operations: map[string]*NFSOperation{
+		Operations: map[string]*internal.NFSOperation{
 			"READ": {
 				Name: "READ",
 				Ops:  0, // Zero operations
 			},
 		},
-		Events: &NFSEvents{},
+		Events: &internal.NFSEvents{},
 	}
 
-	previousMounts := map[string]*NFSMount{"/mnt/nfs": mount}
+	previousMounts := map[string]*internal.NFSMount{"/mnt/nfs": mount}
 	monitorMounts := []string{"/mnt/nfs"}
 	opsFilter := map[string]bool{"READ": true}
 
 	t.Run("nfsiostat mode with zero ops", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("printInitialSummary() with zero ops panicked: %v", r)
+				t.Errorf("internal.PrintInitialSummary() with zero ops panicked: %v", r)
 			}
 		}()
 		
-		printInitialSummary(true, monitorMounts, previousMounts, opsFilter, false, "", 1*time.Second)
+		internal.PrintInitialSummary(true, monitorMounts, previousMounts, opsFilter, false, "", 1*time.Second)
 	})
 
 	// Test with nil mount
 	t.Run("nfsiostat mode with nil mount", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("printInitialSummary() with nil mount panicked: %v", r)
+				t.Errorf("internal.PrintInitialSummary() with nil mount panicked: %v", r)
 			}
 		}()
 		
-		previousMountsWithNil := map[string]*NFSMount{"/mnt/nfs": nil}
-		printInitialSummary(true, monitorMounts, previousMountsWithNil, opsFilter, false, "", 1*time.Second)
+		previousMountsWithNil := map[string]*internal.NFSMount{"/mnt/nfs": nil}
+		internal.PrintInitialSummary(true, monitorMounts, previousMountsWithNil, opsFilter, false, "", 1*time.Second)
 	})
 
 	// Test with filtered operations
 	t.Run("nfsiostat mode with filtered ops", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("printInitialSummary() with filtered ops panicked: %v", r)
+				t.Errorf("internal.PrintInitialSummary() with filtered ops panicked: %v", r)
 			}
 		}()
 		
 		// Filter that excludes READ operations
 		filteredOpsFilter := map[string]bool{"WRITE": true}
-		printInitialSummary(true, monitorMounts, previousMounts, filteredOpsFilter, false, "", 1*time.Second)
+		internal.PrintInitialSummary(true, monitorMounts, previousMounts, filteredOpsFilter, false, "", 1*time.Second)
 	})
 }

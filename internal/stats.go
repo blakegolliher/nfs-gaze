@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package internal
 
 import (
 	"bufio"
@@ -14,8 +14,8 @@ import (
 
 
 
-// parseEvents parses the events line into an NFSEvents struct
-func parseEvents(parts []string) (*NFSEvents, error) {
+// ParseEvents parses the events line into an NFSEvents struct
+func ParseEvents(parts []string) (*NFSEvents, error) {
 	events := &NFSEvents{}
 	if len(parts) < 27 {
 		return events, fmt.Errorf("invalid number of parts for events: %d", len(parts))
@@ -139,7 +139,7 @@ func parseEvents(parts []string) (*NFSEvents, error) {
 }
 
 // parseMountstats parses /proc/self/mountstats and returns NFS mount information.
-func parseMountstats(path string) (map[string]*NFSMount, error) {
+func ParseMountstats(path string) (map[string]*NFSMount, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -194,7 +194,7 @@ func parseMountstats(path string) (map[string]*NFSMount, error) {
 				parts := strings.Fields(line)
 				if len(parts) > 1 {
 					var err error
-					currentMount.Events, err = parseEvents(parts[1:])
+					currentMount.Events, err = ParseEvents(parts[1:])
 					if err != nil {
 						log.Printf("error parsing events for mount %s: %v", currentMount.MountPoint, err)
 					}
@@ -277,7 +277,7 @@ func parseMountstats(path string) (map[string]*NFSMount, error) {
 }
 
 // calculateDelta computes the difference between two measurements.
-func calculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *DeltaStats {
+func CalculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *DeltaStats {
 	if previousOp == nil || currentOp == nil {
 		return nil
 	}
@@ -315,7 +315,7 @@ func calculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *D
 }
 
 // displayStatsNfsiostat shows stats in nfsiostat format. 
-func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *NFSMount, showAttr bool) {
+func DisplayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *NFSMount, showAttr bool) {
 	// Calculate total ops/s
 	totalOps := float64(0)
 	for _, s := range stats {
@@ -374,7 +374,7 @@ func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *
 }
 
 // displayStatsSimple shows stats in simple format with optional bandwidth. 
-func displayStatsSimple(mount *NFSMount, stats []*DeltaStats, showBandwidth bool, timestamp time.Time) {
+func DisplayStatsSimple(mount *NFSMount, stats []*DeltaStats, showBandwidth bool, timestamp time.Time) {
 	if len(stats) == 0 {
 		return
 	}

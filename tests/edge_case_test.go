@@ -1,12 +1,14 @@
 //go:build linux
 
-package main
+package tests
 
 import (
 	"flag"
 	"io/ioutil"
 	"os"
 	"testing"
+
+	internal "nfs-gazer/internal"
 )
 
 // Test getMountsToMonitor error case by capturing fatal calls
@@ -15,13 +17,13 @@ func TestGetMountsToMonitorMissingMount(t *testing.T) {
 	// In a real test framework, we might use dependency injection
 	// For now, let's test the success path more thoroughly
 
-	previousMounts := map[string]*NFSMount{
+	previousMounts := map[string]*internal.NFSMount{
 		"/mnt/nfs1": {MountPoint: "/mnt/nfs1", Device: "server1:/export1"},
 		"/mnt/nfs2": {MountPoint: "/mnt/nfs2", Device: "server2:/export2"},
 	}
 
 	t.Run("multiple mounts returned", func(t *testing.T) {
-		result := getMountsToMonitor("", previousMounts)
+		result := internal.GetMountsToMonitor("", previousMounts)
 		
 		// Should return all mount points
 		if len(result) != 2 {
@@ -59,7 +61,7 @@ func TestInitFlagsInvalidArguments(t *testing.T) {
 		os.Args = []string{"nfs-gaze", "/mnt/test", "invalid"}
 
 		// This should not panic and should use default interval
-		_, _, interval, _, _, _, _, _, _ := initFlags()
+		_, _, interval, _, _, _, _, _, _ := internal.InitFlags()
 		
 		// Should still be default since parsing failed
 		if *interval != 1000000000 { // 1 second in nanoseconds
@@ -73,7 +75,7 @@ func TestInitFlagsInvalidArguments(t *testing.T) {
 		os.Args = []string{"nfs-gaze", "/mnt/test", "2", "invalid"}
 
 		// This should not panic and should use default count
-		_, _, _, count, _, _, _, _, _ := initFlags()
+		_, _, _, count, _, _, _, _, _ := internal.InitFlags()
 		
 		// Should still be default since parsing failed
 		if *count != 0 {
@@ -86,7 +88,7 @@ func TestInitFlagsInvalidArguments(t *testing.T) {
 		flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 		os.Args = []string{"nfs-gaze", "-m", "/explicit", "/positional"}
 
-		mountPoint, _, _, _, _, _, _, _, _ := initFlags()
+		mountPoint, _, _, _, _, _, _, _, _ := internal.InitFlags()
 		
 		// Should use the flag value, not positional
 		if *mountPoint != "/explicit" {
@@ -147,9 +149,9 @@ READ: 100 50`,
 			}
 
 			// Should not panic, even with corrupted data
-			mounts, err := parseMountstats(tmpfile.Name())
+			mounts, err := internal.ParseMountstats(tmpfile.Name())
 			if err != nil {
-				t.Errorf("parseMountstats() unexpected error with %s: %v", tt.name, err)
+				t.Errorf("ParseMountstats() unexpected error with %s: %v", tt.name, err)
 			}
 			
 			// Should return empty or partial results gracefully
@@ -166,12 +168,12 @@ func TestParseEventsEdgeCases(t *testing.T) {
 			parts[i] = "1"
 		}
 		
-		result, err := parseEvents(parts)
+		result, err := internal.ParseEvents(parts)
 		if err != nil {
-			t.Errorf("parseEvents() unexpected error: %v", err)
+			t.Errorf("ParseEvents() unexpected error: %v", err)
 		}
 		if result == nil {
-			t.Error("parseEvents() expected non-nil result")
+			t.Error("ParseEvents() expected non-nil result")
 		}
 	})
 
@@ -181,12 +183,12 @@ func TestParseEventsEdgeCases(t *testing.T) {
 			parts[i] = "1"
 		}
 		
-		result, err := parseEvents(parts)
+		result, err := internal.ParseEvents(parts)
 		if err != nil {
-			t.Errorf("parseEvents() unexpected error: %v", err)
+			t.Errorf("ParseEvents() unexpected error: %v", err)
 		}
 		if result == nil {
-			t.Error("parseEvents() expected non-nil result")
+			t.Error("ParseEvents() expected non-nil result")
 		}
 	})
 
@@ -200,12 +202,12 @@ func TestParseEventsEdgeCases(t *testing.T) {
 			}
 		}
 		
-		result, err := parseEvents(parts)
+		result, err := internal.ParseEvents(parts)
 		if err == nil {
-			t.Error("parseEvents() expected error with invalid integer")
+			t.Error("ParseEvents() expected error with invalid integer")
 		}
 		if result != nil {
-			t.Error("parseEvents() expected nil result on error")
+			t.Error("ParseEvents() expected nil result on error")
 		}
 	})
 
@@ -215,12 +217,12 @@ func TestParseEventsEdgeCases(t *testing.T) {
 			parts[i] = "1"
 		}
 		
-		result, err := parseEvents(parts)
+		result, err := internal.ParseEvents(parts)
 		if err == nil {
-			t.Error("parseEvents() expected error with insufficient parts")
+			t.Error("ParseEvents() expected error with insufficient parts")
 		}
 		if result == nil {
-			t.Error("parseEvents() should return empty NFSEvents struct, not nil")
+			t.Error("ParseEvents() should return empty NFSEvents struct, not nil")
 		}
 	})
 }
@@ -228,29 +230,29 @@ func TestParseEventsEdgeCases(t *testing.T) {
 // Test more edge cases in calculateDelta
 func TestCalculateDeltaEdgeCases(t *testing.T) {
 	t.Run("negative operations decrease", func(t *testing.T) {
-		oldOp := &NFSOperation{Name: "READ", Ops: 100}
-		newOp := &NFSOperation{Name: "READ", Ops: 50}
+		oldOp := &internal.NFSOperation{Name: "READ", Ops: 100}
+		newOp := &internal.NFSOperation{Name: "READ", Ops: 50}
 		
-		result := calculateDelta(oldOp, newOp, 1.0)
+		result := internal.CalculateDelta(oldOp, newOp, 1.0)
 		
 		if result == nil {
-			t.Error("calculateDelta() expected non-nil result")
+			t.Error("CalculateDelta() expected non-nil result")
 			return
 		}
 		
 		if result.DeltaOps != 0 {
-			t.Errorf("calculateDelta() DeltaOps = %v, want 0 for negative delta", result.DeltaOps)
+			t.Errorf("CalculateDelta() DeltaOps = %v, want 0 for negative delta", result.DeltaOps)
 		}
 	})
 
 	t.Run("zero duration", func(t *testing.T) {
-		oldOp := &NFSOperation{Name: "READ", Ops: 50}
-		newOp := &NFSOperation{Name: "READ", Ops: 100}
+		oldOp := &internal.NFSOperation{Name: "READ", Ops: 50}
+		newOp := &internal.NFSOperation{Name: "READ", Ops: 100}
 		
-		result := calculateDelta(oldOp, newOp, 0.0)
+		result := internal.CalculateDelta(oldOp, newOp, 0.0)
 		
 		if result == nil {
-			t.Error("calculateDelta() expected non-nil result")
+			t.Error("CalculateDelta() expected non-nil result")
 			return
 		}
 		
