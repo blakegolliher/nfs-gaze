@@ -33,7 +33,6 @@ The nfs-gaze project includes comprehensive unit tests covering core functionali
 | stats.go | parseEvents | 71.6% |
 | stats.go | parseMountstats | 86.9% |
 | stats.go | calculateDelta | 100.0% |
-| stats.go | displayStatsNfsiostat | 100.0% |
 | stats.go | displayStatsSimple | 93.3% |
 | utils.go | initFlags | 60.7% |
 | utils.go | parseOperationsFilter | 100.0% |
@@ -43,7 +42,6 @@ The nfs-gaze project includes comprehensive unit tests covering core functionali
 
 ### High Coverage Functions (90%+)
 - `calculateDelta` - 100% - Delta calculation between NFS operation measurements
-- `displayStatsNfsiostat` - 100% - nfsiostat-compatible output formatting
 - `parseOperationsFilter` - 100% - Command line operation filtering
 - `printInitialSummary` - 94.7% - Initial monitoring session output
 - `displayStatsSimple` - 93.3% - Simple output format display
@@ -142,8 +140,7 @@ The project aims for:
    - Age and byte statistics parsing
 
 2. **Display Functions**
-   - nfsiostat-compatible output format
-   - Simple monitoring mode output
+   - Simple monitoring mode output format
    - Attribute cache statistics display
    - Empty data handling
 

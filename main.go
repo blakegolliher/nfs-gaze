@@ -17,7 +17,7 @@ func main() {
 		fmt.Println("This tool is only supported on Linux.")
 		os.Exit(1)
 	}
-	mountPoint, operations, interval, count, showAttr, showBandwidth, nfsiostatMode, clearScreen, mountstatsPath := internal.InitFlags()
+	mountPoint, operations, interval, count, showAttr, showBandwidth, clearScreen, mountstatsPath := internal.InitFlags()
 
 	opsFilter := internal.ParseOperationsFilter(*operations)
 
@@ -35,8 +35,8 @@ func main() {
 	monitorMounts := internal.GetMountsToMonitor(*mountPoint, previousMounts)
 
 	// Print the initial summary of the monitored mounts.
-	internal.PrintInitialSummary(*nfsiostatMode, monitorMounts, previousMounts, opsFilter, *showAttr, *operations, *interval)
+	internal.PrintInitialSummary(monitorMounts, previousMounts, opsFilter, *showAttr, *operations, *interval)
 
 	// Start the main monitoring loop.
-	internal.MonitoringLoop(sigChan, *interval, *count, *mountstatsPath, *clearScreen, *nfsiostatMode, monitorMounts, previousMounts, opsFilter, *showAttr, *showBandwidth, *operations)
+	internal.MonitoringLoop(sigChan, *interval, *count, *mountstatsPath, *clearScreen, monitorMounts, previousMounts, opsFilter, *showAttr, *showBandwidth, *operations)
 }

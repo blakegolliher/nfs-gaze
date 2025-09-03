@@ -269,38 +269,6 @@ func TestParseMountstats(t *testing.T) {
 	})
 }
 
-func TestDisplayStatsNfsiostat(t *testing.T) {
-	mount := &internal.NFSMount{
-		Device:     "server:/export",
-		MountPoint: "/mnt/nfs",
-	}
-
-	stats := []*internal.DeltaStats{
-		{
-			Operation: "READ",
-			DeltaOps:  50,
-			IOPS:      25.0,
-			KBPerSec:  100.0,
-			KBPerOp:   2.0,
-			AvgRTT:    5.0,
-			AvgExec:   3.0,
-			AvgQueue:  1.0,
-		},
-	}
-
-	// Test that the function doesn't panic
-	t.Run("no panic on display", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.DisplayStatsNfsiostat() panicked: %v", r)
-			}
-		}()
-		
-		// Capture output would require redirecting stdout
-		// For now, just ensure it doesn't crash
-		internal.DisplayStatsNfsiostat(mount, stats, nil, false)
-	})
-}
 
 func TestDisplayStatsSimple(t *testing.T) {
 	mount := &internal.NFSMount{

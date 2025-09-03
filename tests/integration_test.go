@@ -138,7 +138,7 @@ func TestInitFlagsEdgeCases(t *testing.T) {
 		flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 		os.Args = []string{"nfs-gaze", "/mnt/test", "5", "10"}
 
-		mountPoint, _, interval, count, _, _, _, _, _ := internal.InitFlags()
+		mountPoint, _, interval, count, _, _, _, _ := internal.InitFlags()
 
 		if *mountPoint != "/mnt/test" {
 			t.Errorf("mountPoint = %v, want /mnt/test", *mountPoint)
@@ -156,7 +156,7 @@ func TestInitFlagsEdgeCases(t *testing.T) {
 		flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 		os.Args = []string{"nfs-gaze", "-f", "/custom/mountstats"}
 
-		_, _, _, _, _, _, _, _, mountstatsPath := internal.InitFlags()
+		_, _, _, _, _, _, _, mountstatsPath := internal.InitFlags()
 
 		if *mountstatsPath != "/custom/mountstats" {
 			t.Errorf("mountstatsPath = %v, want /custom/mountstats", *mountstatsPath)
@@ -164,66 +164,6 @@ func TestInitFlagsEdgeCases(t *testing.T) {
 	})
 }
 
-// Test DisplayStatsNfsiostat with various scenarios
-func TestDisplayStatsNfsiostatScenarios(t *testing.T) {
-	mount := &internal.NFSMount{
-		Device:     "server:/export",
-		MountPoint: "/mnt/nfs",
-		Events:     &internal.NFSEvents{VFSOpen: 100, InodeRevalidate: 50, DataInvalidate: 10, AttrInvalidate: 5},
-	}
-
-	previousMount := &internal.NFSMount{
-		Device:     "server:/export",
-		MountPoint: "/mnt/nfs",
-		Events:     &internal.NFSEvents{VFSOpen: 80, InodeRevalidate: 30, DataInvalidate: 8, AttrInvalidate: 2},
-	}
-
-	stats := []*internal.DeltaStats{
-		{
-			Operation:    "READ",
-			DeltaOps:     100,
-			DeltaRetrans: 5,
-			DeltaErrors:  2,
-			IOPS:         50.0,
-			KBPerSec:     100.0,
-			KBPerOp:      2.0,
-			AvgRTT:       10.0,
-			AvgExec:      5.0,
-			AvgQueue:     2.0,
-		},
-	}
-
-	t.Run("with attribute stats", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.DisplayStatsNfsiostat() with attr panicked: %v", r)
-			}
-		}()
-		
-		internal.DisplayStatsNfsiostat(mount, stats, previousMount, true)
-	})
-
-	t.Run("with empty stats", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.DisplayStatsNfsiostat() with empty stats panicked: %v", r)
-			}
-		}()
-		
-		internal.DisplayStatsNfsiostat(mount, []*internal.DeltaStats{}, nil, false)
-	})
-
-	t.Run("with nil stats", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.DisplayStatsNfsiostat() with nil stats panicked: %v", r)
-			}
-		}()
-		
-		statsWithNil := []*internal.DeltaStats{nil, stats[0]}
-		internal.DisplayStatsNfsiostat(mount, statsWithNil, nil, false)
-	})
-}
 
 // Test DisplayStatsSimple with various scenarios
 func TestDisplayStatsSimpleScenarios(t *testing.T) {
@@ -288,58 +228,3 @@ func TestDisplayStatsSimpleScenarios(t *testing.T) {
 	})
 }
 
-// Test PrintInitialSummary edge cases  
-func TestPrintInitialSummaryEdgeCases(t *testing.T) {
-	// Test with zero operations
-	mount := &internal.NFSMount{
-		Device:     "server:/export",
-		MountPoint: "/mnt/nfs",
-		Age:        3600,
-		Operations: map[string]*internal.NFSOperation{
-			"READ": {
-				Name: "READ",
-				Ops:  0, // Zero operations
-			},
-		},
-		Events: &internal.NFSEvents{},
-	}
-
-	previousMounts := map[string]*internal.NFSMount{"/mnt/nfs": mount}
-	monitorMounts := []string{"/mnt/nfs"}
-	opsFilter := map[string]bool{"READ": true}
-
-	t.Run("nfsiostat mode with zero ops", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.PrintInitialSummary() with zero ops panicked: %v", r)
-			}
-		}()
-		
-		internal.PrintInitialSummary(true, monitorMounts, previousMounts, opsFilter, false, "", 1*time.Second)
-	})
-
-	// Test with nil mount
-	t.Run("nfsiostat mode with nil mount", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.PrintInitialSummary() with nil mount panicked: %v", r)
-			}
-		}()
-		
-		previousMountsWithNil := map[string]*internal.NFSMount{"/mnt/nfs": nil}
-		internal.PrintInitialSummary(true, monitorMounts, previousMountsWithNil, opsFilter, false, "", 1*time.Second)
-	})
-
-	// Test with filtered operations
-	t.Run("nfsiostat mode with filtered ops", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.PrintInitialSummary() with filtered ops panicked: %v", r)
-			}
-		}()
-		
-		// Filter that excludes READ operations
-		filteredOpsFilter := map[string]bool{"WRITE": true}
-		internal.PrintInitialSummary(true, monitorMounts, previousMounts, filteredOpsFilter, false, "", 1*time.Second)
-	})
-}

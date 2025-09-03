@@ -150,14 +150,13 @@ func TestInitFlags(t *testing.T) {
 				"count":          0,
 				"showAttr":       false,
 				"showBandwidth":  false,
-				"nfsiostatMode":  false,
 				"clearScreen":    false,
 				"mountstatsPath": "/proc/self/mountstats",
 			},
 		},
 		{
 			name: "with flags",
-			args: []string{"nfs-gaze", "-m", "/mnt/nfs", "-ops", "READ,WRITE", "-i", "2s", "-c", "5", "-attr", "-bw", "-nfsiostat", "-clear"},
+			args: []string{"nfs-gaze", "-m", "/mnt/nfs", "-ops", "READ,WRITE", "-i", "2s", "-c", "5", "-attr", "-bw", "-clear"},
 			expected: map[string]interface{}{
 				"mountPoint":     "/mnt/nfs",
 				"operations":     "READ,WRITE",
@@ -165,7 +164,6 @@ func TestInitFlags(t *testing.T) {
 				"count":          5,
 				"showAttr":       true,
 				"showBandwidth":  true,
-				"nfsiostatMode":  true,
 				"clearScreen":    true,
 				"mountstatsPath": "/proc/self/mountstats",
 			},
@@ -178,7 +176,7 @@ func TestInitFlags(t *testing.T) {
 			flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 			os.Args = tt.args
 
-			mountPoint, operations, interval, count, showAttr, showBandwidth, nfsiostatMode, clearScreen, mountstatsPath := internal.InitFlags()
+			mountPoint, operations, interval, count, showAttr, showBandwidth, clearScreen, mountstatsPath := internal.InitFlags()
 
 			if *mountPoint != tt.expected["mountPoint"] {
 				t.Errorf("mountPoint = %v, want %v", *mountPoint, tt.expected["mountPoint"])
@@ -197,9 +195,6 @@ func TestInitFlags(t *testing.T) {
 			}
 			if *showBandwidth != tt.expected["showBandwidth"] {
 				t.Errorf("showBandwidth = %v, want %v", *showBandwidth, tt.expected["showBandwidth"])
-			}
-			if *nfsiostatMode != tt.expected["nfsiostatMode"] {
-				t.Errorf("nfsiostatMode = %v, want %v", *nfsiostatMode, tt.expected["nfsiostatMode"])
 			}
 			if *clearScreen != tt.expected["clearScreen"] {
 				t.Errorf("clearScreen = %v, want %v", *clearScreen, tt.expected["clearScreen"])
@@ -237,23 +232,13 @@ func TestPrintInitialSummary(t *testing.T) {
 	opsFilter := map[string]bool{"READ": true}
 
 	// Test that the function doesn't panic
-	t.Run("nfsiostat mode no panic", func(t *testing.T) {
+	t.Run("no panic", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
 				t.Errorf("internal.PrintInitialSummary() panicked: %v", r)
 			}
 		}()
 		
-		internal.PrintInitialSummary(true, monitorMounts, previousMounts, opsFilter, false, "READ", 1*time.Second)
-	})
-
-	t.Run("simple mode no panic", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("internal.PrintInitialSummary() panicked: %v", r)
-			}
-		}()
-		
-		internal.PrintInitialSummary(false, monitorMounts, previousMounts, opsFilter, false, "READ", 1*time.Second)
+		internal.PrintInitialSummary(monitorMounts, previousMounts, opsFilter, false, "READ", 1*time.Second)
 	})
 }

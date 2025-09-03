@@ -61,7 +61,7 @@ func TestInitFlagsInvalidArguments(t *testing.T) {
 		os.Args = []string{"nfs-gaze", "/mnt/test", "invalid"}
 
 		// This should not panic and should use default interval
-		_, _, interval, _, _, _, _, _, _ := internal.InitFlags()
+		_, _, interval, _, _, _, _, _ := internal.InitFlags()
 		
 		// Should still be default since parsing failed
 		if *interval != 1000000000 { // 1 second in nanoseconds
@@ -75,7 +75,7 @@ func TestInitFlagsInvalidArguments(t *testing.T) {
 		os.Args = []string{"nfs-gaze", "/mnt/test", "2", "invalid"}
 
 		// This should not panic and should use default count
-		_, _, _, count, _, _, _, _, _ := internal.InitFlags()
+		_, _, _, count, _, _, _, _ := internal.InitFlags()
 		
 		// Should still be default since parsing failed
 		if *count != 0 {
@@ -88,7 +88,7 @@ func TestInitFlagsInvalidArguments(t *testing.T) {
 		flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 		os.Args = []string{"nfs-gaze", "-m", "/explicit", "/positional"}
 
-		mountPoint, _, _, _, _, _, _, _, _ := internal.InitFlags()
+		mountPoint, _, _, _, _, _, _, _ := internal.InitFlags()
 		
 		// Should use the flag value, not positional
 		if *mountPoint != "/explicit" {

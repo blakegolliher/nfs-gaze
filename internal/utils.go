@@ -13,7 +13,7 @@ import (
 )
 
 // InitFlags initializes and parses the command-line flags.
-func InitFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *bool, *string) {
+func InitFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *string) {
 	// Command-line flags
 	var (
 		mountPoint     = flag.String("m", "", "Mount point to monitor")
@@ -22,7 +22,6 @@ func InitFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *
 		count          = flag.Int("c", 0, "Number of iterations (0 = infinite)")
 		showAttr       = flag.Bool("attr", false, "Show attribute cache statistics")
 		showBandwidth  = flag.Bool("bw", false, "Show bandwidth statistics")
-	nfsiostatMode  = flag.Bool("nfsiostat", false, "Use nfsiostat output format")
 		clearScreen    = flag.Bool("clear", false, "Clear screen between iterations")
 		mountstatsPath = flag.String("f", "/proc/self/mountstats", "Path to mountstats file")
 	)
@@ -33,8 +32,6 @@ func InitFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  # Monitor in nfsiostat format\n")
-		fmt.Fprintf(os.Stderr, "  %s --nfsiostat /mnt/nfs --attr\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Monitor specific operations with bandwidth\n")
 		fmt.Fprintf(os.Stderr, "  %s -m /mnt/nfs -ops READ,WRITE -bw\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Clear screen between iterations\n")
@@ -65,7 +62,7 @@ func InitFlags() (*string, *string, *time.Duration, *int, *bool, *bool, *bool, *
 	}
 
 	flag.Parse()
-	return mountPoint, operations, interval, count, showAttr, showBandwidth, nfsiostatMode, clearScreen, mountstatsPath
+	return mountPoint, operations, interval, count, showAttr, showBandwidth, clearScreen, mountstatsPath
 }
 
 // parseOperationsFilter parses the comma-separated list of operations to monitor.
@@ -101,62 +98,17 @@ func GetMountsToMonitor(mountPoint string, previousMounts map[string]*NFSMount) 
 }
 
 // printInitialSummary prints the initial summary of the monitored mounts.
-func PrintInitialSummary(nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, operations string, interval time.Duration) {
-	if nfsiostatMode {
-		for _, mp := range monitorMounts {
-			mount := previousMounts[mp]
-			if mount == nil {
-				continue
-			}
-
-			var stats []*DeltaStats
-			mountAgeSec := float64(mount.Age)
-
-			for _, op := range mount.Operations {
-				if op.Ops > 0 {
-					// Apply filter if specified
-					if opsFilter != nil && !opsFilter[op.Name] {
-						continue
-					}
-
-					delta := &DeltaStats{
-						Operation:    op.Name,
-						DeltaOps:     op.Ops,
-						DeltaSent:    op.BytesSent,
-						DeltaRecv:    op.BytesRecv,
-						DeltaBytes:   op.BytesSent + op.BytesRecv,
-						DeltaRTT:     op.RTT,
-						DeltaExec:    op.ExecuteTime,
-						DeltaQueue:   op.QueueTime,
-						DeltaErrors:  op.Errors,
-						DeltaRetrans: op.Timeouts,
-						IOPS:         float64(op.Ops) / mountAgeSec,
-						AvgRTT:       float64(op.RTT) / float64(op.Ops),
-						AvgExec:      float64(op.ExecuteTime) / float64(op.Ops),
-						AvgQueue:     float64(op.QueueTime) / float64(op.Ops),
-						KBPerOp:      float64(op.BytesSent+op.BytesRecv) / float64(op.Ops) / 1024,
-						KBPerSec:     float64(op.BytesSent+op.BytesRecv) / mountAgeSec / 1024,
-					}
-					stats = append(stats, delta)
-				}
-			}
-
-			if len(stats) > 0 {
-				DisplayStatsNfsiostat(mount, stats, nil, showAttr)
-			}
-		}
-	} else {
-		// Print header for simple mode
-		fmt.Printf("Monitoring NFS mount: %s (%s)\n", monitorMounts[0], previousMounts[monitorMounts[0]].Device)
-		fmt.Printf("Update interval: %v\n", interval)
-		if operations != "" {
-			fmt.Printf("Filtering operations: %s\n", operations)
-		}
+func PrintInitialSummary(monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, operations string, interval time.Duration) {
+	// Print header for simple mode
+	fmt.Printf("Monitoring NFS mount: %s (%s)\n", monitorMounts[0], previousMounts[monitorMounts[0]].Device)
+	fmt.Printf("Update interval: %v\n", interval)
+	if operations != "" {
+		fmt.Printf("Filtering operations: %s\n", operations)
 	}
 }
 
 // monitoringLoop is the main monitoring loop of the application.
-func MonitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, mountstatsPath string, clearScreen bool, nfsiostatMode bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, showBandwidth bool, operations string) {
+func MonitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, mountstatsPath string, clearScreen bool, monitorMounts []string, previousMounts map[string]*NFSMount, opsFilter map[string]bool, showAttr bool, showBandwidth bool, operations string) {
 	// Monitoring loop
 	iteration := 0
 	ticker := time.NewTicker(interval)
@@ -177,8 +129,8 @@ func MonitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, m
 			timestamp := time.Now()
 			duration := interval.Seconds()
 
-			// Clear screen if requested (only for simple mode)
-			if clearScreen && !nfsiostatMode {
+			// Clear screen if requested
+			if clearScreen {
 				fmt.Print("\033[H\033[2J")
 				// Reprint header after clearing
 				fmt.Printf("Monitoring NFS mount: %s (%s)\n", monitorMounts[0], currentMounts[monitorMounts[0]].Device)
@@ -218,13 +170,9 @@ func MonitoringLoop(sigChan chan os.Signal, interval time.Duration, count int, m
 					}
 				}
 
-				// Display results
-				if nfsiostatMode {
-					// Always display in nfsiostat mode (even with no activity)
-					DisplayStatsNfsiostat(currentMount, stats, previousMount, showAttr)
-				} else if len(stats) > 0 {
-					// Simple mode - only show if there's activity
-				DisplayStatsSimple(currentMount, stats, showBandwidth, timestamp)
+				// Display results - only show if there's activity
+				if len(stats) > 0 {
+					DisplayStatsSimple(currentMount, stats, showBandwidth, timestamp)
 				}
 			}
 
