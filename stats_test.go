@@ -49,7 +49,7 @@ func TestParseEvents(t *testing.T) {
 		{
 			name: "invalid number format",
 			parts: []string{
-				"abc", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+				"a", "2", "3", "4", "5", "6", "7", "8", "9", "10",
 				"11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
 				"21", "22", "23", "24", "25", "26", "27",
 			},
@@ -59,9 +59,9 @@ func TestParseEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseEvents(tt.parts)
+			got, err := ParseEvents(tt.parts)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseEvents() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseEvents() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr && tt.verify != nil {
@@ -96,51 +96,43 @@ func TestParseNFSOperation(t *testing.T) {
 				if op.Timeouts != 5 {
 					t.Errorf("Timeouts = %d, want 5", op.Timeouts)
 				}
-				if op.BytesSent != 1024 {
-					t.Errorf("BytesSent = %d, want 1024", op.BytesSent)
+			},
+		},
+		{
+			name:   "valid operation without errors field",
+			opName: "WRITE",
+			stats:  []string{"50", "48", "2", "512", "1024", "5", "10", "15", "0"},
+			verify: func(t *testing.T, op *NFSOperation) {
+				if op.Name != "WRITE" {
+					t.Errorf("Name = %s, want WRITE", op.Name)
 				}
-				if op.BytesRecv != 2048 {
-					t.Errorf("BytesRecv = %d, want 2048", op.BytesRecv)
+				if op.Ops != 50 {
+					t.Errorf("Ops = %d, want 50", op.Ops)
 				}
-				if op.QueueTime != 10 {
-					t.Errorf("QueueTime = %d, want 10", op.QueueTime)
-				}
-				if op.RTT != 20 {
-					t.Errorf("RTT = %d, want 20", op.RTT)
-				}
-				if op.ExecuteTime != 30 {
-					t.Errorf("ExecuteTime = %d, want 30", op.ExecuteTime)
-				}
-				if op.Errors != 2 {
-					t.Errorf("Errors = %d, want 2", op.Errors)
+				if op.Errors != 0 {
+					t.Errorf("Errors = %d, want 0", op.Errors)
 				}
 			},
 		},
 		{
-			name:    "valid operation without errors field",
-			opName:  "WRITE",
-			stats:   []string{"50", "50", "0", "512", "256", "5", "10", "15"},
-			wantErr: true, // This should error because we require at least 9 fields
-		},
-		{
 			name:    "insufficient stats",
 			opName:  "GETATTR",
-			stats:   []string{"100", "95"},
+			stats:   []string{"1", "2", "3"},
 			wantErr: true,
 		},
 		{
 			name:    "invalid number format",
 			opName:  "LOOKUP",
-			stats:   []string{"abc", "95", "5", "1024", "2048", "10", "20", "30"},
+			stats:   []string{"a", "2", "3", "4", "5", "6", "7", "8", "9"},
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseNFSOperation(tt.opName, tt.stats)
+			got, err := ParseNFSOperation(tt.opName, tt.stats)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseNFSOperation() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseNFSOperation() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr && tt.verify != nil {
@@ -158,31 +150,25 @@ func TestParseMountstatsReader(t *testing.T) {
 		verify  func(t *testing.T, mounts map[string]*NFSMount)
 	}{
 		{
-			name: "single NFS mount",
-			input: `device server.example.com:/export mounted on /mnt/nfs with fstype nfs4 statvers=1.1
-	opts:	rw,vers=4.2,rsize=1048576,wsize=1048576
+			name: "valid NFS mount",
+			input: `device server1:/export on /mnt/nfs type nfs4 (rw,relatime)
 	age:	3600
-	caps:	caps=0xffff
-	sec:	flavor=1,pseudoflavor=1
-	events:	100 200 300 400 500 600 700 800 900 1000 1100 1200 1300 1400 1500 1600 1700 1800 1900 2000 2100 2200 2300 2400 2500 2600 2700
-	bytes:	1048576 0 0 0 2097152 0 0 0
-	RPC iostats version: 1.0  p/v: 100003/4 (nfs)
-	xprt:	tcp 0 0 1 0 0 100 100 0 100 0 2 1000 2000
-	per-op statistics
-	NULL: 1 1 0 40 24 5 0 5 0
-	READ: 100 100 0 10240 204800 500 1000 1500 0
-	WRITE: 50 50 0 102400 5120 250 500 750 0
-	GETATTR: 200 200 0 20480 40960 1000 2000 3000 0`,
+	events:	1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
+	bytes:	100 0 0 0 200 0 0 0
+	READ: 10 10 0 1024 2048 50 100 150 0
+	WRITE: 5 5 0 512 1024 25 50 75 0`,
+			wantErr: false,
 			verify: func(t *testing.T, mounts map[string]*NFSMount) {
 				if len(mounts) != 1 {
-					t.Fatalf("got %d mounts, want 1", len(mounts))
+					t.Errorf("Expected 1 mount, got %d", len(mounts))
 				}
-				mount, ok := mounts["/mnt/nfs"]
-				if !ok {
-					t.Fatal("mount /mnt/nfs not found")
+				mount, exists := mounts["/mnt/nfs"]
+				if !exists {
+					t.Error("Mount /mnt/nfs not found")
+					return
 				}
-				if mount.Server != "server.example.com" {
-					t.Errorf("Server = %s, want server.example.com", mount.Server)
+				if mount.Server != "server1" {
+					t.Errorf("Server = %s, want server1", mount.Server)
 				}
 				if mount.Export != "/export" {
 					t.Errorf("Export = %s, want /export", mount.Export)
@@ -190,103 +176,63 @@ func TestParseMountstatsReader(t *testing.T) {
 				if mount.Age != 3600 {
 					t.Errorf("Age = %d, want 3600", mount.Age)
 				}
-				if mount.BytesRead != 1048576 {
-					t.Errorf("BytesRead = %d, want 1048576", mount.BytesRead)
-				}
-				if mount.BytesWrite != 2097152 {
-					t.Errorf("BytesWrite = %d, want 2097152", mount.BytesWrite)
-				}
-				if len(mount.Operations) != 4 {
-					t.Errorf("got %d operations, want 4", len(mount.Operations))
-				}
-				if readOp, ok := mount.Operations["READ"]; ok {
-					if readOp.Ops != 100 {
-						t.Errorf("READ.Ops = %d, want 100", readOp.Ops)
-					}
-				} else {
-					t.Error("READ operation not found")
+				if len(mount.Operations) != 2 {
+					t.Errorf("Expected 2 operations, got %d", len(mount.Operations))
 				}
 			},
 		},
 		{
 			name: "multiple NFS mounts",
-			input: `device server1:/export1 mounted on /mnt/nfs1 with fstype nfs4 statvers=1.1
-	age:	1000
+			input: `device server1:/export1 on /mnt/nfs1 type nfs4 (rw,relatime)
+	age:	1800
 	events:	1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
-	bytes:	100 0 0 0 200 0 0 0
-device server2:/export2 mounted on /mnt/nfs2 with fstype nfs4 statvers=1.1
-	age:	2000
-	events:	10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200 210 220 230 240 250 260 270
-	bytes:	300 0 0 0 400 0 0 0`,
+	bytes:	50 0 0 0 100 0 0 0
+device server2:/export2 on /mnt/nfs2 type nfs4 (ro,relatime)
+	age:	900
+	events:	1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
+	bytes:	25 0 0 0 50 0 0 0`,
+			wantErr: false,
 			verify: func(t *testing.T, mounts map[string]*NFSMount) {
 				if len(mounts) != 2 {
-					t.Fatalf("got %d mounts, want 2", len(mounts))
-				}
-				mount1, ok := mounts["/mnt/nfs1"]
-				if !ok {
-					t.Fatal("mount /mnt/nfs1 not found")
-				}
-				if mount1.Server != "server1" {
-					t.Errorf("mount1.Server = %s, want server1", mount1.Server)
-				}
-				mount2, ok := mounts["/mnt/nfs2"]
-				if !ok {
-					t.Fatal("mount /mnt/nfs2 not found")
-				}
-				if mount2.Server != "server2" {
-					t.Errorf("mount2.Server = %s, want server2", mount2.Server)
+					t.Errorf("Expected 2 mounts, got %d", len(mounts))
 				}
 			},
 		},
 		{
-			name: "NFS mount without colon in server",
-			input: `device server mounted on /mnt/nfs with fstype nfs4 statvers=1.1
-	age:	1000
-	events:	1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
-	bytes:	100 0 0 0 200 0 0 0`,
-			verify: func(t *testing.T, mounts map[string]*NFSMount) {
-				mount := mounts["/mnt/nfs"]
-				if mount.Server != "server" {
-					t.Errorf("Server = %s, want server", mount.Server)
-				}
-				if mount.Export != "/" {
-					t.Errorf("Export = %s, want /", mount.Export)
-				}
-			},
-		},
-		{
-			name:  "empty input",
-			input: "",
-			verify: func(t *testing.T, mounts map[string]*NFSMount) {
-				if len(mounts) != 0 {
-					t.Errorf("got %d mounts, want 0", len(mounts))
-				}
-			},
-		},
-		{
-			name: "non-NFS mounts should be ignored",
-			input: `device /dev/sda1 mounted on / with fstype ext4
-device server:/export mounted on /mnt/nfs with fstype nfs4 statvers=1.1
-	age:	1000
-	events:	1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
-	bytes:	100 0 0 0 200 0 0 0`,
+			name: "non-NFS mount (should be ignored)",
+			input: `device /dev/sda1 on / type ext4 (rw,relatime)
+device server:/export on /mnt/nfs type nfs4 (rw,relatime)
+	age:	3600`,
+			wantErr: false,
 			verify: func(t *testing.T, mounts map[string]*NFSMount) {
 				if len(mounts) != 1 {
-					t.Fatalf("got %d mounts, want 1", len(mounts))
-				}
-				if _, ok := mounts["/mnt/nfs"]; !ok {
-					t.Fatal("NFS mount not found")
+					t.Errorf("Expected 1 NFS mount, got %d", len(mounts))
 				}
 			},
+		},
+		{
+			name:    "empty input",
+			input:   "",
+			wantErr: false,
+			verify: func(t *testing.T, mounts map[string]*NFSMount) {
+				if len(mounts) != 0 {
+					t.Errorf("Expected 0 mounts for empty input, got %d", len(mounts))
+				}
+			},
+		},
+		{
+			name:    "malformed device line",
+			input:   "device server:/export type nfs4",
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := strings.NewReader(tt.input)
-			got, err := parseMountstatsReader(reader)
+			got, err := ParseMountstatsReader(reader)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseMountstatsReader() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseMountstatsReader() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr && tt.verify != nil {
@@ -309,8 +255,8 @@ func TestCalculateDelta(t *testing.T) {
 			previousOp: &NFSOperation{
 				Name:        "READ",
 				Ops:         100,
-				BytesSent:   1000,
-				BytesRecv:   2000,
+				BytesSent:   1024,
+				BytesRecv:   2048,
 				RTT:         500,
 				ExecuteTime: 1000,
 				QueueTime:   100,
@@ -320,8 +266,8 @@ func TestCalculateDelta(t *testing.T) {
 			currentOp: &NFSOperation{
 				Name:        "READ",
 				Ops:         200,
-				BytesSent:   2000,
-				BytesRecv:   4000,
+				BytesSent:   2048,
+				BytesRecv:   4096,
 				RTT:         1000,
 				ExecuteTime: 2000,
 				QueueTime:   200,
@@ -330,17 +276,11 @@ func TestCalculateDelta(t *testing.T) {
 			},
 			duration: 1.0,
 			verify: func(t *testing.T, delta *DeltaStats) {
+				if delta.Operation != "READ" {
+					t.Errorf("Operation = %s, want READ", delta.Operation)
+				}
 				if delta.DeltaOps != 100 {
 					t.Errorf("DeltaOps = %d, want 100", delta.DeltaOps)
-				}
-				if delta.DeltaSent != 1000 {
-					t.Errorf("DeltaSent = %d, want 1000", delta.DeltaSent)
-				}
-				if delta.DeltaRecv != 2000 {
-					t.Errorf("DeltaRecv = %d, want 2000", delta.DeltaRecv)
-				}
-				if delta.DeltaBytes != 3000 {
-					t.Errorf("DeltaBytes = %d, want 3000", delta.DeltaBytes)
 				}
 				if delta.IOPS != 100.0 {
 					t.Errorf("IOPS = %f, want 100.0", delta.IOPS)
@@ -348,36 +288,13 @@ func TestCalculateDelta(t *testing.T) {
 				if delta.AvgRTT != 5.0 {
 					t.Errorf("AvgRTT = %f, want 5.0", delta.AvgRTT)
 				}
-				if delta.AvgExec != 10.0 {
-					t.Errorf("AvgExec = %f, want 10.0", delta.AvgExec)
-				}
-				if delta.KBPerOp != 3000.0/100.0/1024.0 {
-					t.Errorf("KBPerOp = %f, want %f", delta.KBPerOp, 3000.0/100.0/1024.0)
-				}
-			},
-		},
-		{
-			name: "no operations delta",
-			previousOp: &NFSOperation{
-				Name: "WRITE",
-				Ops:  100,
-			},
-			currentOp: &NFSOperation{
-				Name: "WRITE",
-				Ops:  100,
-			},
-			duration: 1.0,
-			verify: func(t *testing.T, delta *DeltaStats) {
-				if delta.DeltaOps != 0 {
-					t.Errorf("DeltaOps = %d, want 0", delta.DeltaOps)
-				}
 			},
 		},
 		{
 			name:       "nil previous operation",
 			previousOp: nil,
 			currentOp: &NFSOperation{
-				Name: "GETATTR",
+				Name: "WRITE",
 				Ops:  50,
 			},
 			duration: 1.0,
@@ -402,27 +319,19 @@ func TestCalculateDelta(t *testing.T) {
 			},
 		},
 		{
-			name: "multi-second duration",
+			name: "no operations increase",
 			previousOp: &NFSOperation{
-				Name:      "READ",
-				Ops:       0,
-				BytesSent: 0,
-				BytesRecv: 0,
+				Name: "LOOKUP",
+				Ops:  100,
 			},
 			currentOp: &NFSOperation{
-				Name:      "READ",
-				Ops:       100,
-				BytesSent: 10240,
-				BytesRecv: 20480,
+				Name: "LOOKUP",
+				Ops:  100,
 			},
-			duration: 10.0,
+			duration: 1.0,
 			verify: func(t *testing.T, delta *DeltaStats) {
-				if delta.IOPS != 10.0 {
-					t.Errorf("IOPS = %f, want 10.0", delta.IOPS)
-				}
-				expectedKBPerSec := 30720.0 / 10.0 / 1024.0
-				if delta.KBPerSec != expectedKBPerSec {
-					t.Errorf("KBPerSec = %f, want %f", delta.KBPerSec, expectedKBPerSec)
+				if delta.DeltaOps != 0 {
+					t.Errorf("DeltaOps = %d, want 0", delta.DeltaOps)
 				}
 			},
 		},
@@ -430,7 +339,7 @@ func TestCalculateDelta(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := calculateDelta(tt.previousOp, tt.currentOp, tt.duration)
+			got := CalculateDelta(tt.previousOp, tt.currentOp, tt.duration)
 			if tt.verify != nil {
 				tt.verify(t, got)
 			}

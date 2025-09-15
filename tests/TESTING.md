@@ -26,7 +26,6 @@ The test suite covers the following components:
    - Initial summary printing
 
 3. **Display Functions (`display_test.go`)**
-   - nfsiostat format output
    - Simple format output with/without bandwidth
    - Empty stats handling
    - Attribute cache statistics display
@@ -60,7 +59,8 @@ go test -v ./...
 
 Generate coverage report:
 ```bash
-go test -coverprofile=coverage.out ./...
+# Using Makefile (recommended)
+make coverage
 ```
 
 View coverage percentage:
@@ -68,17 +68,27 @@ View coverage percentage:
 go test -cover ./...
 ```
 
-Generate HTML coverage report:
+Generate markdown coverage report:
 ```bash
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out -o coverage.html
-# Open coverage.html in a browser
+# Using Makefile (recommended)
+make coverage
+
+# Or manually
+go test -coverprofile=tests/coverage.out ./...
+go run tests/coverage_to_md.go > tests/COVERAGE.md
+# View tests/COVERAGE.md for detailed coverage report
+```
+
+Generate HTML coverage report (alternative):
+```bash
+make coverage-html
+# Opens in browser automatically
 ```
 
 View coverage in terminal:
 ```bash
-go test -coverprofile=coverage.out ./...
-go tool cover -func=coverage.out
+go test -coverprofile=tests/coverage.out ./...
+go tool cover -func=tests/coverage.out
 ```
 
 ### Run Specific Tests

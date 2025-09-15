@@ -32,13 +32,12 @@ func TestInitFlags(t *testing.T) {
 				Count:          0,
 				ShowAttr:       false,
 				ShowBandwidth:  false,
-				NfsiostatMode:  false,
 				ClearScreen:    false,
 				MountstatsPath: "/proc/self/mountstats",
 			},
 		},
 		{
-			name: "with mount point flag",
+			name: "with mount point",
 			args: []string{"nfs-gaze", "-m", "/mnt/nfs"},
 			expected: &Flags{
 				MountPoint:     "/mnt/nfs",
@@ -47,69 +46,50 @@ func TestInitFlags(t *testing.T) {
 				Count:          0,
 				ShowAttr:       false,
 				ShowBandwidth:  false,
-				NfsiostatMode:  false,
 				ClearScreen:    false,
 				MountstatsPath: "/proc/self/mountstats",
 			},
 		},
 		{
-			name: "with multiple flags",
-			args: []string{"nfs-gaze", "-m", "/mnt/nfs", "-ops", "READ,WRITE", "-i", "5s", "-c", "10", "--attr", "--bw"},
+			name: "with operations filter",
+			args: []string{"nfs-gaze", "-ops", "READ,WRITE"},
 			expected: &Flags{
-				MountPoint:     "/mnt/nfs",
+				MountPoint:     "",
 				Operations:     "READ,WRITE",
-				Interval:       5 * time.Second,
-				Count:          10,
-				ShowAttr:       true,
-				ShowBandwidth:  true,
-				NfsiostatMode:  false,
-				ClearScreen:    false,
-				MountstatsPath: "/proc/self/mountstats",
-			},
-		},
-		{
-			name: "positional arguments",
-			args: []string{"nfs-gaze", "/mnt/nfs", "2", "5"},
-			expected: &Flags{
-				MountPoint:     "/mnt/nfs",
-				Operations:     "",
-				Interval:       2 * time.Second,
-				Count:          5,
-				ShowAttr:       false,
-				ShowBandwidth:  false,
-				NfsiostatMode:  false,
-				ClearScreen:    false,
-				MountstatsPath: "/proc/self/mountstats",
-			},
-		},
-		{
-			name: "nfsiostat mode",
-			args: []string{"nfs-gaze", "--nfsiostat", "-m", "/mnt/nfs"},
-			expected: &Flags{
-				MountPoint:     "/mnt/nfs",
-				Operations:     "",
 				Interval:       1 * time.Second,
 				Count:          0,
 				ShowAttr:       false,
 				ShowBandwidth:  false,
-				NfsiostatMode:  true,
 				ClearScreen:    false,
 				MountstatsPath: "/proc/self/mountstats",
 			},
 		},
 		{
-			name: "custom mountstats path",
-			args: []string{"nfs-gaze", "-f", "/custom/path/mountstats"},
+			name: "with custom interval",
+			args: []string{"nfs-gaze", "-i", "5s"},
 			expected: &Flags{
 				MountPoint:     "",
 				Operations:     "",
-				Interval:       1 * time.Second,
+				Interval:       5 * time.Second,
 				Count:          0,
 				ShowAttr:       false,
 				ShowBandwidth:  false,
-				NfsiostatMode:  false,
 				ClearScreen:    false,
-				MountstatsPath: "/custom/path/mountstats",
+				MountstatsPath: "/proc/self/mountstats",
+			},
+		},
+		{
+			name: "with all flags",
+			args: []string{"nfs-gaze", "-m", "/mnt/nfs", "-ops", "READ", "-i", "2s", "-c", "10", "-attr", "-bw", "-clear"},
+			expected: &Flags{
+				MountPoint:     "/mnt/nfs",
+				Operations:     "READ",
+				Interval:       2 * time.Second,
+				Count:          10,
+				ShowAttr:       true,
+				ShowBandwidth:  true,
+				ClearScreen:    true,
+				MountstatsPath: "/proc/self/mountstats",
 			},
 		},
 	}
@@ -120,10 +100,10 @@ func TestInitFlags(t *testing.T) {
 			flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 			os.Args = tt.args
 
-			got := initFlags()
+			got := InitFlags()
 
 			if !reflect.DeepEqual(got, tt.expected) {
-				t.Errorf("initFlags() = %+v, want %+v", got, tt.expected)
+				t.Errorf("InitFlags() = %+v, want %+v", got, tt.expected)
 			}
 		})
 	}
@@ -164,9 +144,9 @@ func TestParseOperationsFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseOperationsFilter(tt.operations)
+			got := ParseOperationsFilter(tt.operations)
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseOperationsFilter(%q) = %v, want %v", tt.operations, got, tt.want)
+				t.Errorf("ParseOperationsFilter(%q) = %v, want %v", tt.operations, got, tt.want)
 			}
 		})
 	}
@@ -184,7 +164,7 @@ func TestGetMountsToMonitor(t *testing.T) {
 			name:       "specific mount point exists",
 			mountPoint: "/mnt/nfs",
 			previousMounts: map[string]*NFSMount{
-				"/mnt/nfs": {MountPoint: "/mnt/nfs"},
+				"/mnt/nfs": &NFSMount{MountPoint: "/mnt/nfs"},
 			},
 			want:    []string{"/mnt/nfs"},
 			wantErr: false,
@@ -193,7 +173,7 @@ func TestGetMountsToMonitor(t *testing.T) {
 			name:       "specific mount point does not exist",
 			mountPoint: "/mnt/nonexistent",
 			previousMounts: map[string]*NFSMount{
-				"/mnt/nfs": {MountPoint: "/mnt/nfs"},
+				"/mnt/nfs": &NFSMount{MountPoint: "/mnt/nfs"},
 			},
 			want:    nil,
 			wantErr: true,
@@ -202,8 +182,8 @@ func TestGetMountsToMonitor(t *testing.T) {
 			name:       "all mounts when no specific mount point",
 			mountPoint: "",
 			previousMounts: map[string]*NFSMount{
-				"/mnt/nfs1": {MountPoint: "/mnt/nfs1"},
-				"/mnt/nfs2": {MountPoint: "/mnt/nfs2"},
+				"/mnt/nfs1": &NFSMount{MountPoint: "/mnt/nfs1"},
+				"/mnt/nfs2": &NFSMount{MountPoint: "/mnt/nfs2"},
 			},
 			want:    []string{"/mnt/nfs1", "/mnt/nfs2"},
 			wantErr: false,
@@ -219,25 +199,26 @@ func TestGetMountsToMonitor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := getMountsToMonitor(tt.mountPoint, tt.previousMounts)
+			got, err := GetMountsToMonitor(tt.mountPoint, tt.previousMounts)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("getMountsToMonitor() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("GetMountsToMonitor() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !tt.wantErr {
-				// For the "all mounts" case, we need to handle unordered results
-				if tt.mountPoint == "" && len(got) == len(tt.want) {
-					gotMap := make(map[string]bool)
-					for _, m := range got {
-						gotMap[m] = true
-					}
-					for _, w := range tt.want {
-						if !gotMap[w] {
-							t.Errorf("getMountsToMonitor() missing mount %s", w)
-						}
-					}
-				} else if !reflect.DeepEqual(got, tt.want) {
-					t.Errorf("getMountsToMonitor() = %v, want %v", got, tt.want)
+
+			// Sort both slices for comparison since order may vary
+			if len(got) != len(tt.want) {
+				t.Errorf("GetMountsToMonitor() = %v, want %v", got, tt.want)
+				return
+			}
+
+			gotMap := make(map[string]bool)
+			for _, v := range got {
+				gotMap[v] = true
+			}
+			for _, v := range tt.want {
+				if !gotMap[v] {
+					t.Errorf("GetMountsToMonitor() = %v, want %v", got, tt.want)
+					return
 				}
 			}
 		})
@@ -245,11 +226,9 @@ func TestGetMountsToMonitor(t *testing.T) {
 }
 
 func TestPrintInitialSummary(t *testing.T) {
-	// This test primarily ensures the function doesn't panic
-	// Actual output testing would require capturing stdout which is more complex
+	// This test mainly ensures that printInitialSummary doesn't panic
 
 	flags := &Flags{
-		NfsiostatMode: false,
 		Interval:      1 * time.Second,
 		Operations:    "READ,WRITE",
 		ShowAttr:      false,
@@ -258,12 +237,12 @@ func TestPrintInitialSummary(t *testing.T) {
 	monitorMounts := []string{"/mnt/nfs"}
 
 	previousMounts := map[string]*NFSMount{
-		"/mnt/nfs": {
+		"/mnt/nfs": &NFSMount{
 			Device:     "server:/export",
 			MountPoint: "/mnt/nfs",
 			Age:        3600,
 			Operations: map[string]*NFSOperation{
-				"READ": {
+				"READ": &NFSOperation{
 					Name:        "READ",
 					Ops:         100,
 					BytesSent:   1024,
@@ -278,7 +257,7 @@ func TestPrintInitialSummary(t *testing.T) {
 
 	opsFilter := map[string]bool{"READ": true, "WRITE": true}
 
-	// Test non-nfsiostat mode
+	// Test that the function doesn't panic
 	t.Run("simple mode", func(t *testing.T) {
 		// Redirect stdout to prevent test output pollution
 		oldStdout := os.Stdout
@@ -286,20 +265,6 @@ func TestPrintInitialSummary(t *testing.T) {
 		defer func() { os.Stdout = oldStdout }()
 
 		// Should not panic
-		printInitialSummary(flags, monitorMounts, previousMounts, opsFilter)
-	})
-
-	// Test nfsiostat mode
-	t.Run("nfsiostat mode", func(t *testing.T) {
-		nfsFlags := *flags
-		nfsFlags.NfsiostatMode = true
-
-		// Redirect stdout to prevent test output pollution
-		oldStdout := os.Stdout
-		os.Stdout, _ = os.Open(os.DevNull)
-		defer func() { os.Stdout = oldStdout }()
-
-		// Should not panic
-		printInitialSummary(&nfsFlags, monitorMounts, previousMounts, opsFilter)
+		PrintInitialSummary(flags, monitorMounts, previousMounts, opsFilter)
 	})
 }

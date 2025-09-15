@@ -8,27 +8,27 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 - **No Kernel Modules Required**: Works directly with `/proc/self/mountstats` - no eBPF or special permissions needed
 - **Real-Time Monitoring**: Live updates with configurable intervals
 - **Operation Filtering**: Focus on specific NFS operations that matter to you
-- **Multiple Output Formats**: Default detailed view or nfsiostat-compatible format
+- **Clear Output Format**: Detailed performance metrics in an easy-to-read display
 
 ## Why nfs-gaze?
 
 ### Comparison with Other Tools
 
-| Feature | nfs-gaze | nfsiostat | nfsstat | nfsslower (bcc) |
-|---------|----------|-----------|---------|-----------------|
-| Per-operation latency | ✅ | ❌ | ❌ | ✅ |
-| No kernel modules needed | ✅ | ✅ | ✅ | ❌ |
-| No root required* | ✅ | ✅ | ✅ | ❌ |
-| Real-time monitoring | ✅ | ✅ | ❌ | ✅ |
-| Operation filtering | ✅ | ❌ | ❌ | ✅ |
-| Easy setup | ✅ | ✅ | ✅ | ❌ |
-| RTT/latency per op type | ✅ | ❌ | ❌ | ✅ |
+| Feature | nfs-gaze | nfsstat | nfsslower (bcc) |
+|---------|----------|---------|-----------------|
+| Per-operation latency | ✅ | ❌ | ✅ |
+| No kernel modules needed | ✅ | ✅ | ❌ |
+| No root required* | ✅ | ✅ | ❌ |
+| Real-time monitoring | ✅ | ❌ | ✅ |
+| Operation filtering | ✅ | ❌ | ✅ |
+| Easy setup | ✅ | ✅ | ❌ |
+| RTT/latency per op type | ✅ | ❌ | ✅ |
 
 *Reading /proc/self/mountstats requires the process to have access to its own mount namespace
 
 ### What Makes nfs-gaze Different
 
-- **Latency-First Design**: While `nfsiostat` shows throughput and IOPS, `nfs-gaze` focuses on latency per operation type
+- **Latency-First Design**: Focus on latency metrics per operation type for better performance troubleshooting
 - **Easier Than BCC Tools**: No need to install BCC, kernel headers, or deal with eBPF complexity
 - **Surgical Precision**: Filter and monitor only the operations you care about (e.g., just metadata ops like GETATTR and LOOKUP)
 
@@ -144,7 +144,6 @@ Use during benchmarks to understand NFS behavior:
 | `-c` | | 0 | Number of iterations (0 = infinite) |
 | `-attr` | | false | Show attribute cache statistics |
 | `-bw` | | false | Show bandwidth statistics |
-| | `--nfsiostat` | false | Use nfsiostat output format |
 | | `--clear` | false | Clear screen between iterations |
 | `-f` | | /proc/self/mountstats | Path to mountstats file |
 
@@ -199,8 +198,8 @@ Common operations you can monitor:
 ### Integration with Monitoring Systems
 
 ```bash
-# Output in parseable format
-./nfs-gaze -m /mnt/nfs --nfsiostat | grep -E "READ|WRITE"
+# Filter specific operations
+./nfs-gaze -m /mnt/nfs -ops READ,WRITE
 
 # Feed to monitoring tools
 ./nfs-gaze -m /mnt/nfs -c 1 | custom-metrics-collector
@@ -232,10 +231,14 @@ GOOS=linux GOARCH=arm64 go build -o nfs-gaze-arm64 .
 # Run tests
 go test ./...
 
-# With coverage
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
+# Generate coverage report
+make coverage
 ```
+
+📁 **Testing Documentation**: See the [tests/](tests/) directory for:
+- [Testing Guide](tests/TESTING.md) - Complete testing documentation
+- [Coverage Report](tests/COVERAGE.md) - Latest test coverage metrics
+- [Test README](tests/README.md) - Quick testing reference
 
 ## Troubleshooting
 
@@ -265,6 +268,11 @@ This is personal project and is not affiliated with any organization. It comes w
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+Before submitting a PR:
+1. Run tests: `make test`
+2. Check coverage: `make coverage`
+3. See [tests/TESTING.md](tests/TESTING.md) for testing guidelines
 
 ## Author
 

@@ -88,9 +88,9 @@ Requires:       kernel >= 2.6.17
 
 %description
 nfs-gaze is a real-time NFS I/O performance monitoring tool that provides
-detailed statistics about NFS operations, similar to iostat but specifically
-for NFS mounts. It reads from /proc/self/mountstats to display IOPS,
-bandwidth, latency, and other metrics.
+detailed statistics about NFS operations with per-operation latency tracking.
+It reads from /proc/self/mountstats to display IOPS, bandwidth, latency,
+and other metrics for comprehensive NFS performance analysis.
 
 %prep
 %setup -q
@@ -192,13 +192,13 @@ Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Real-time NFS performance monitoring tool
  nfs-gaze is a real-time NFS I/O performance monitoring tool that provides
- detailed statistics about NFS operations, similar to iostat but specifically
- for NFS mounts. It reads from /proc/self/mountstats to display IOPS,
- bandwidth, latency, and other metrics.
+ detailed statistics about NFS operations with per-operation latency tracking.
+ It reads from /proc/self/mountstats to display IOPS, bandwidth, latency,
+ and other metrics for comprehensive NFS performance analysis.
  .
  Features:
   - Real-time monitoring of NFS mounts
-  - Multiple output formats (simple and nfsiostat-compatible)
+  - Per-operation latency tracking
   - Configurable update intervals
   - Operation filtering
   - Bandwidth and attribute cache statistics

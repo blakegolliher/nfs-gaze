@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// parseEvents parses the events line into an NFSEvents struct.
-func parseEvents(parts []string) (*NFSEvents, error) {
+// ParseEvents parses the events line into an NFSEvents struct.
+func ParseEvents(parts []string) (*NFSEvents, error) {
 	if len(parts) < 27 {
 		return nil, fmt.Errorf("invalid number of parts for events: %d", len(parts))
 	}
@@ -117,7 +117,7 @@ func parseEvents(parts []string) (*NFSEvents, error) {
 	return &e, nil
 }
 
-func parseNFSOperation(opName string, stats []string) (*NFSOperation, error) {
+func ParseNFSOperation(opName string, stats []string) (*NFSOperation, error) {
 	if len(stats) < 9 {
 		return nil, fmt.Errorf("invalid number of stats for op %s: %d", opName, len(stats))
 	}
@@ -258,7 +258,7 @@ func (p *mountstatsParser) parseEvents(line string) error {
 		return fmt.Errorf("invalid events line: %s", line)
 	}
 	var err error
-	p.currentMount.Events, err = parseEvents(parts[1:])
+	p.currentMount.Events, err = ParseEvents(parts[1:])
 	return err
 }
 
@@ -284,7 +284,7 @@ func (p *mountstatsParser) parseOperation(line string) error {
 	opName := strings.TrimSpace(opParts[0])
 	stats := strings.Fields(opParts[1])
 
-	op, err := parseNFSOperation(opName, stats)
+	op, err := ParseNFSOperation(opName, stats)
 	if err != nil {
 		return err
 	}
@@ -292,19 +292,19 @@ func (p *mountstatsParser) parseOperation(line string) error {
 	return nil
 }
 
-// parseMountstats parses /proc/self/mountstats and returns NFS mount information.
-func parseMountstats(path string) (map[string]*NFSMount, error) {
+// ParseMountstats parses /proc/self/mountstats and returns NFS mount information.
+func ParseMountstats(path string) (map[string]*NFSMount, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	return parseMountstatsReader(file)
+	return ParseMountstatsReader(file)
 }
 
-// parseMountstatsReader parses mountstats from an io.Reader for better testability
-func parseMountstatsReader(r io.Reader) (map[string]*NFSMount, error) {
+// ParseMountstatsReader parses mountstats from an io.Reader for better testability
+func ParseMountstatsReader(r io.Reader) (map[string]*NFSMount, error) {
 	parser := &mountstatsParser{
 		scanner: bufio.NewScanner(r),
 		mounts:  make(map[string]*NFSMount),
@@ -318,8 +318,8 @@ func parseMountstatsReader(r io.Reader) (map[string]*NFSMount, error) {
 }
 			
 
-// calculateDelta computes the difference between two measurements.
-func calculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *DeltaStats {
+// CalculateDelta computes the difference between two measurements.
+func CalculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *DeltaStats {
 	if previousOp == nil || currentOp == nil {
 		return nil
 	}
@@ -356,67 +356,8 @@ func calculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *D
 	return delta
 }
 
-// displayStatsNfsiostat shows stats in nfsiostat format.
-func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *NFSMount, showAttr bool) {
-	// Calculate total ops/s
-	totalOps := float64(0)
-	for _, s := range stats {
-		if s != nil {
-			totalOps += s.IOPS
-		}
-	}
-
-	// Print mount header and summary
-	fmt.Printf("\n%s mounted on %s:\n\n", mount.Device, mount.MountPoint)
-	fmt.Printf("%16s %16s\n", "ops/s", "rpc bklog")
-	fmt.Printf("%16.3f %16.3f\n\n", totalOps, 0.000)
-
-	// Print per-operation statistics
-	for _, s := range stats {
-		if s == nil || s.DeltaOps == 0 {
-			continue
-		}
-
-		opName := strings.ToLower(s.Operation)
-		fmt.Printf("%s:", opName)
-
-		// Calculate error and retrans percentages
-		errorPct := float64(0)
-		if s.DeltaOps > 0 {
-			errorPct = float64(s.DeltaErrors) / float64(s.DeltaOps) * 100
-		}
-		retransPct := float64(0)
-		if s.DeltaOps > 0 {
-			retransPct = float64(s.DeltaRetrans) / float64(s.DeltaOps) * 100
-		}
-
-		// Print header for this operation
-		fmt.Printf("%16s %16s %16s %16s %16s %16s %16s %16s\n",
-			"ops/s", "kB/s", "kB/op", "retrans", "avg RTT (ms)", "avg exe (ms)", "avg queue (ms)", "errors")
-
-		// Print values
-		fmt.Printf("%26.3f %16.3f %16.3f %8d (%.1f%%) %16.3f %16.3f %16.3f %8d (%.1f%%)\n",
-			s.IOPS, s.KBPerSec, s.KBPerOp, s.DeltaRetrans, retransPct,
-			s.AvgRTT, s.AvgExec, s.AvgQueue, s.DeltaErrors, errorPct)
-	}
-
-	// Print attribute cache statistics if requested
-	if showAttr && previousMount != nil {
-		fmt.Printf("\n")
-		vfsOpens := mount.Events.VFSOpen - previousMount.Events.VFSOpen
-		inodeRevals := mount.Events.InodeRevalidate - previousMount.Events.InodeRevalidate
-		pageInvals := mount.Events.DataInvalidate - previousMount.Events.DataInvalidate
-		attrInvals := mount.Events.AttrInvalidate - previousMount.Events.AttrInvalidate
-
-		fmt.Printf("%d VFS opens\n", vfsOpens)
-		fmt.Printf("%d inoderevalidates (forced GETATTRs)\n", inodeRevals)
-		fmt.Printf("%d page cache invalidations\n", pageInvals)
-		fmt.Printf("%d attribute cache invalidations\n", attrInvals)
-	}
-}
-
-// displayStatsSimple shows stats in simple format with optional bandwidth.
-func displayStatsSimple(mount *NFSMount, stats []*DeltaStats, showBandwidth bool, timestamp time.Time) {
+// DisplayStatsSimple shows stats in simple format with optional bandwidth.
+func DisplayStatsSimple(mount *NFSMount, stats []*DeltaStats, showBandwidth bool, timestamp time.Time) {
 	if len(stats) == 0 {
 		return
 	}

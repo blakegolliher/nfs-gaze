@@ -1,0 +1,30 @@
+# Binary
+nfs-gaze
+nfs-gaze-*
+
+# Test coverage
+tests/coverage.out
+tests/coverage.html
+coverage.out
+coverage.html
+*.cover
+
+# Build artifacts
+dist/
+*.rpm
+*.deb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
