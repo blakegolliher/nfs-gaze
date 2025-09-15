@@ -3,34 +3,37 @@
 package main
 
 import (
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	"log"
 )
 
 // main is the entry point of the application.
 func main() {
-	mountPoint, operations, interval, count, showAttr, showBandwidth, nfsiostatMode, clearScreen, mountstatsPath := initFlags()
+	flags := initFlags()
 
-	opsFilter := parseOperationsFilter(*operations)
+	opsFilter := parseOperationsFilter(flags.Operations)
 
 	// Setup signal handling for graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	// Perform an initial read of the mount stats.
-	previousMounts, err := parseMountstats(*mountstatsPath)
+	previousMounts, err := parseMountstats(flags.MountstatsPath)
 	if err != nil {
 		log.Fatal("Error reading mountstats: ", err)
 	}
 
 	// Determine which mounts to monitor based on user input.
-	monitorMounts := getMountsToMonitor(*mountPoint, previousMounts)
+	monitorMounts, err := getMountsToMonitor(flags.MountPoint, previousMounts)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Print the initial summary of the monitored mounts.
-	printInitialSummary(*nfsiostatMode, monitorMounts, previousMounts, opsFilter, *showAttr, *operations, *interval)
+	printInitialSummary(flags, monitorMounts, previousMounts, opsFilter)
 
 	// Start the main monitoring loop.
-	monitoringLoop(sigChan, *interval, *count, *mountstatsPath, *clearScreen, *nfsiostatMode, monitorMounts, previousMounts, opsFilter, *showAttr, *showBandwidth, *operations)
+	monitoringLoop(sigChan, flags, monitorMounts, previousMounts, opsFilter)
 }

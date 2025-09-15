@@ -12,128 +12,282 @@ import (
 	"time"
 )
 
-// parseEvents parses the events line into an NFSEvents struct
+// parseEvents parses the events line into an NFSEvents struct.
 func parseEvents(parts []string) (*NFSEvents, error) {
-	events := &NFSEvents{}
 	if len(parts) < 27 {
-		return events, fmt.Errorf("invalid number of parts for events: %d", len(parts))
+		return nil, fmt.Errorf("invalid number of parts for events: %d", len(parts))
 	}
 
-	var err error
-	events.InodeRevalidate, err = strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
+	parseInt := func(s string) (int64, error) {
+		return strconv.ParseInt(s, 10, 64)
+	}
+
+	var (
+		err error
+		e   NFSEvents
+	)
+
+	if e.InodeRevalidate, err = parseInt(parts[0]); err != nil {
 		return nil, fmt.Errorf("error parsing InodeRevalidate: %w", err)
 	}
-	events.DentryRevalidate, err = strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
+	if e.DentryRevalidate, err = parseInt(parts[1]); err != nil {
 		return nil, fmt.Errorf("error parsing DentryRevalidate: %w", err)
 	}
-	events.DataInvalidate, err = strconv.ParseInt(parts[2], 10, 64)
-	if err != nil {
+	if e.DataInvalidate, err = parseInt(parts[2]); err != nil {
 		return nil, fmt.Errorf("error parsing DataInvalidate: %w", err)
 	}
-	events.AttrInvalidate, err = strconv.ParseInt(parts[3], 10, 64)
-	if err != nil {
+	if e.AttrInvalidate, err = parseInt(parts[3]); err != nil {
 		return nil, fmt.Errorf("error parsing AttrInvalidate: %w", err)
 	}
-	events.VFSOpen, err = strconv.ParseInt(parts[4], 10, 64)
-	if err != nil {
+	if e.VFSOpen, err = parseInt(parts[4]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSOpen: %w", err)
 	}
-	events.VFSLookup, err = strconv.ParseInt(parts[5], 10, 64)
-	if err != nil {
+	if e.VFSLookup, err = parseInt(parts[5]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSLookup: %w", err)
 	}
-	events.VFSAccess, err = strconv.ParseInt(parts[6], 10, 64)
-	if err != nil {
+	if e.VFSAccess, err = parseInt(parts[6]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSAccess: %w", err)
 	}
-	events.VFSUpdatePage, err = strconv.ParseInt(parts[7], 10, 64)
-	if err != nil {
+	if e.VFSUpdatePage, err = parseInt(parts[7]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSUpdatePage: %w", err)
 	}
-	events.VFSReadPage, err = strconv.ParseInt(parts[8], 10, 64)
-	if err != nil {
+	if e.VFSReadPage, err = parseInt(parts[8]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSReadPage: %w", err)
 	}
-	events.VFSReadPages, err = strconv.ParseInt(parts[9], 10, 64)
-	if err != nil {
+	if e.VFSReadPages, err = parseInt(parts[9]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSReadPages: %w", err)
 	}
-	events.VFSWritePage, err = strconv.ParseInt(parts[10], 10, 64)
-	if err != nil {
+	if e.VFSWritePage, err = parseInt(parts[10]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSWritePage: %w", err)
 	}
-	events.VFSWritePages, err = strconv.ParseInt(parts[11], 10, 64)
-	if err != nil {
+	if e.VFSWritePages, err = parseInt(parts[11]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSWritePages: %w", err)
 	}
-	events.VFSGetdents, err = strconv.ParseInt(parts[12], 10, 64)
-	if err != nil {
+	if e.VFSGetdents, err = parseInt(parts[12]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSGetdents: %w", err)
 	}
-	events.VFSSetattr, err = strconv.ParseInt(parts[13], 10, 64)
-	if err != nil {
+	if e.VFSSetattr, err = parseInt(parts[13]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSSetattr: %w", err)
 	}
-	events.VFSFlush, err = strconv.ParseInt(parts[14], 10, 64)
-	if err != nil {
+	if e.VFSFlush, err = parseInt(parts[14]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSFlush: %w", err)
 	}
-	events.VFSFsync, err = strconv.ParseInt(parts[15], 10, 64)
-	if err != nil {
+	if e.VFSFsync, err = parseInt(parts[15]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSFsync: %w", err)
 	}
-	events.VFSLock, err = strconv.ParseInt(parts[16], 10, 64)
-	if err != nil {
+	if e.VFSLock, err = parseInt(parts[16]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSLock: %w", err)
 	}
-	events.VFSRelease, err = strconv.ParseInt(parts[17], 10, 64)
-	if err != nil {
+	if e.VFSRelease, err = parseInt(parts[17]); err != nil {
 		return nil, fmt.Errorf("error parsing VFSRelease: %w", err)
 	}
-	events.CongestionWait, err = strconv.ParseInt(parts[18], 10, 64)
-	if err != nil {
+	if e.CongestionWait, err = parseInt(parts[18]); err != nil {
 		return nil, fmt.Errorf("error parsing CongestionWait: %w", err)
 	}
-	events.SetattrTrunc, err = strconv.ParseInt(parts[19], 10, 64)
-	if err != nil {
+	if e.SetattrTrunc, err = parseInt(parts[19]); err != nil {
 		return nil, fmt.Errorf("error parsing SetattrTrunc: %w", err)
 	}
-	events.ExtendWrite, err = strconv.ParseInt(parts[20], 10, 64)
-	if err != nil {
+	if e.ExtendWrite, err = parseInt(parts[20]); err != nil {
 		return nil, fmt.Errorf("error parsing ExtendWrite: %w", err)
 	}
-	events.SillyRename, err = strconv.ParseInt(parts[21], 10, 64)
-	if err != nil {
+	if e.SillyRename, err = parseInt(parts[21]); err != nil {
 		return nil, fmt.Errorf("error parsing SillyRename: %w", err)
 	}
-	events.ShortRead, err = strconv.ParseInt(parts[22], 10, 64)
-	if err != nil {
+	if e.ShortRead, err = parseInt(parts[22]); err != nil {
 		return nil, fmt.Errorf("error parsing ShortRead: %w", err)
 	}
-	events.ShortWrite, err = strconv.ParseInt(parts[23], 10, 64)
-	if err != nil {
+	if e.ShortWrite, err = parseInt(parts[23]); err != nil {
 		return nil, fmt.Errorf("error parsing ShortWrite: %w", err)
 	}
-	events.Delay, err = strconv.ParseInt(parts[24], 10, 64)
-	if err != nil {
+	if e.Delay, err = parseInt(parts[24]); err != nil {
 		return nil, fmt.Errorf("error parsing Delay: %w", err)
 	}
 	if len(parts) > 25 {
-		events.PNFSRead, err = strconv.ParseInt(parts[25], 10, 64)
-		if err != nil {
+		if e.PNFSRead, err = parseInt(parts[25]); err != nil {
 			return nil, fmt.Errorf("error parsing PNFSRead: %w", err)
 		}
 	}
 	if len(parts) > 26 {
-		events.PNFSWrite, err = strconv.ParseInt(parts[26], 10, 64)
-		if err != nil {
+		if e.PNFSWrite, err = parseInt(parts[26]); err != nil {
 			return nil, fmt.Errorf("error parsing PNFSWrite: %w", err)
 		}
 	}
 
-	return events, nil
+	return &e, nil
+}
+
+func parseNFSOperation(opName string, stats []string) (*NFSOperation, error) {
+	if len(stats) < 9 {
+		return nil, fmt.Errorf("invalid number of stats for op %s: %d", opName, len(stats))
+	}
+
+	parseInt := func(s string) (int64, error) {
+		return strconv.ParseInt(s, 10, 64)
+	}
+
+	var (
+		err error
+		op  NFSOperation
+	)
+
+	op.Name = opName
+	if op.Ops, err = parseInt(stats[0]); err != nil {
+		return nil, fmt.Errorf("error parsing ops for %s: %w", opName, err)
+	}
+	if op.Ntrans, err = parseInt(stats[1]); err != nil {
+		return nil, fmt.Errorf("error parsing ntrans for %s: %w", opName, err)
+	}
+	if op.Timeouts, err = parseInt(stats[2]); err != nil {
+		return nil, fmt.Errorf("error parsing timeouts for %s: %w", opName, err)
+	}
+	if op.BytesSent, err = parseInt(stats[3]); err != nil {
+		return nil, fmt.Errorf("error parsing bytes sent for %s: %w", opName, err)
+	}
+	if op.BytesRecv, err = parseInt(stats[4]); err != nil {
+		return nil, fmt.Errorf("error parsing bytes recv for %s: %w", opName, err)
+	}
+	if op.QueueTime, err = parseInt(stats[5]); err != nil {
+		return nil, fmt.Errorf("error parsing queue time for %s: %w", opName, err)
+	}
+	if op.RTT, err = parseInt(stats[6]); err != nil {
+		return nil, fmt.Errorf("error parsing rtt for %s: %w", opName, err)
+	}
+	if op.ExecuteTime, err = parseInt(stats[7]); err != nil {
+		return nil, fmt.Errorf("error parsing execute time for %s: %w", opName, err)
+	}
+	if len(stats) > 8 {
+		if op.Errors, err = parseInt(stats[8]); err != nil {
+			return nil, fmt.Errorf("error parsing errors for %s: %w", opName, err)
+		}
+	}
+
+	return &op, nil
+}
+
+type mountstatsParser struct {
+	scanner      *bufio.Scanner
+	mounts       map[string]*NFSMount
+	currentMount *NFSMount
+}
+
+func (p *mountstatsParser) parse() error {
+	for p.scanner.Scan() {
+		if err := p.parseLine(p.scanner.Text()); err != nil {
+			return err
+		}
+	}
+	return p.scanner.Err()
+}
+
+func (p *mountstatsParser) parseLine(line string) error {
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(line, "device") && strings.Contains(line, "nfs") {
+		return p.parseDeviceLine(line)
+	} else if p.currentMount != nil {
+		return p.parseStatsLine(line)
+	}
+	return nil
+}
+
+func (p *mountstatsParser) parseDeviceLine(line string) error {
+	lineParts := strings.SplitN(line, " on ", 2)
+	if len(lineParts) != 2 {
+		return fmt.Errorf("invalid device line: %s", line)
+	}
+	deviceInfo := strings.Fields(lineParts[0])
+	mountInfo := strings.Fields(lineParts[1])
+
+	if len(deviceInfo) < 2 || len(mountInfo) < 1 {
+		return fmt.Errorf("invalid device info: %s", line)
+	}
+
+	serverExport := deviceInfo[1]
+	mountPoint := mountInfo[0]
+
+	serverParts := strings.SplitN(serverExport, ":", 2)
+	server := serverParts[0]
+	export := "/"
+	if len(serverParts) > 1 {
+		export = serverParts[1]
+	}
+
+	p.currentMount = &NFSMount{
+		Device:     serverExport,
+		MountPoint: mountPoint,
+		Server:     server,
+		Export:     export,
+		Operations: make(map[string]*NFSOperation),
+		Events:     &NFSEvents{},
+	}
+	p.mounts[mountPoint] = p.currentMount
+	return nil
+}
+
+func (p *mountstatsParser) parseStatsLine(line string) error {
+	switch {
+	case strings.HasPrefix(line, "age:"):
+		return p.parseAge(line)
+	case strings.HasPrefix(line, "events:"):
+		return p.parseEvents(line)
+	case strings.HasPrefix(line, "bytes:"):
+		return p.parseBytes(line)
+	case strings.Contains(line, ":") && !strings.HasPrefix(line, "RPC") &&
+		!strings.HasPrefix(line, "xprt") && !strings.HasPrefix(line, "per-op") &&
+		!strings.HasPrefix(line, "opts") && !strings.HasPrefix(line, "caps") &&
+		!strings.HasPrefix(line, "sec"):
+		return p.parseOperation(line)
+	}
+	return nil
+}
+
+func (p *mountstatsParser) parseAge(line string) error {
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid age line: %s", line)
+	}
+	var err error
+	p.currentMount.Age, err = strconv.ParseInt(parts[1], 10, 64)
+	return err
+}
+
+func (p *mountstatsParser) parseEvents(line string) error {
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid events line: %s", line)
+	}
+	var err error
+	p.currentMount.Events, err = parseEvents(parts[1:])
+	return err
+}
+
+func (p *mountstatsParser) parseBytes(line string) error {
+	parts := strings.Fields(line)
+	if len(parts) < 6 {
+		return fmt.Errorf("invalid bytes line: %s", line)
+	}
+	var err error
+	p.currentMount.BytesRead, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return err
+	}
+	p.currentMount.BytesWrite, err = strconv.ParseInt(parts[5], 10, 64)
+	return err
+}
+
+func (p *mountstatsParser) parseOperation(line string) error {
+	opParts := strings.SplitN(line, ":", 2)
+	if len(opParts) != 2 {
+		return fmt.Errorf("invalid operation line: %s", line)
+	}
+	opName := strings.TrimSpace(opParts[0])
+	stats := strings.Fields(opParts[1])
+
+	op, err := parseNFSOperation(opName, stats)
+	if err != nil {
+		return err
+	}
+	p.currentMount.Operations[opName] = op
+	return nil
 }
 
 // parseMountstats parses /proc/self/mountstats and returns NFS mount information.
@@ -144,141 +298,18 @@ func parseMountstats(path string) (map[string]*NFSMount, error) {
 	}
 	defer file.Close()
 
-	mounts := make(map[string]*NFSMount)
-	scanner := bufio.NewScanner(file)
-
-	var currentMount *NFSMount
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// Parse device line
-		if strings.HasPrefix(line, "device") && strings.Contains(line, "nfs") {
-			lineParts := strings.SplitN(line, " on ", 2)
-			if len(lineParts) != 2 {
-				continue
-			}
-			deviceInfo := strings.Fields(lineParts[0])
-			mountInfo := strings.Fields(lineParts[1])
-
-			if len(deviceInfo) >= 2 && len(mountInfo) >= 1 {
-				serverExport := deviceInfo[1]
-				mountPoint := mountInfo[0]
-
-				// Split server:export
-				serverParts := strings.SplitN(serverExport, ":", 2)
-				server := serverParts[0]
-				export := "/"
-				if len(serverParts) > 1 {
-					export = serverParts[1]
-				}
-
-				currentMount = &NFSMount{
-					Device:     serverExport,
-					MountPoint: mountPoint,
-					Server:     server,
-					Export:     export,
-					Operations: make(map[string]*NFSOperation),
-					Events:     &NFSEvents{},
-				}
-				mounts[mountPoint] = currentMount
-			}
-		} else if currentMount != nil {
-			// Parse stats for current mount
-			if strings.HasPrefix(line, "age:") {
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					var err error
-					currentMount.Age, err = strconv.ParseInt(parts[1], 10, 64)
-					if err != nil {
-						log.Printf("error parsing age for mount %s: %v", currentMount.MountPoint, err)
-					}
-				}
-			} else if strings.HasPrefix(line, "events:") {
-				parts := strings.Fields(line)
-				if len(parts) > 1 {
-					var err error
-					currentMount.Events, err = parseEvents(parts[1:])
-					if err != nil {
-						log.Printf("error parsing events for mount %s: %v", currentMount.MountPoint, err)
-					}
-				}
-			} else if strings.HasPrefix(line, "bytes:") {
-				parts := strings.Fields(line)
-				if len(parts) >= 5 {
-					var err error
-					currentMount.BytesRead, err = strconv.ParseInt(parts[1], 10, 64)
-					if err != nil {
-						log.Printf("error parsing bytes read for mount %s: %v", currentMount.MountPoint, err)
-					}
-					currentMount.BytesWrite, err = strconv.ParseInt(parts[5], 10, 64)
-					if err != nil {
-						log.Printf("error parsing bytes write for mount %s: %v", currentMount.MountPoint, err)
-					}
-				}
-			} else if strings.Contains(line, ":") && !strings.HasPrefix(line, "RPC") &&
-			      !strings.HasPrefix(line, "xprt") && !strings.HasPrefix(line, "per-op") &&
-			      !strings.HasPrefix(line, "opts") && !strings.HasPrefix(line, "caps") &&
-			      !strings.HasPrefix(line, "sec") {
-				// Parse operation statistics
-				opParts := strings.SplitN(line, ":", 2)
-				if len(opParts) == 2 {
-					opName := strings.TrimSpace(opParts[0])
-					stats := strings.Fields(opParts[1])
-
-					if len(stats) >= 9 {
-						var err error
-						op := &NFSOperation{
-							Name: opName,
-						}
-						op.Ops, err = strconv.ParseInt(stats[0], 10, 64)
-						if err != nil {
-							log.Printf("error parsing ops for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						op.Ntrans, err = strconv.ParseInt(stats[1], 10, 64)
-						if err != nil {
-							log.Printf("error parsing ntrans for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						op.Timeouts, err = strconv.ParseInt(stats[2], 10, 64)
-						if err != nil {
-							log.Printf("error parsing timeouts for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						op.BytesSent, err = strconv.ParseInt(stats[3], 10, 64)
-						if err != nil {
-							log.Printf("error parsing bytes sent for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						op.BytesRecv, err = strconv.ParseInt(stats[4], 10, 64)
-						if err != nil {
-							log.Printf("error parsing bytes recv for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						op.QueueTime, err = strconv.ParseInt(stats[5], 10, 64)
-						if err != nil {
-							log.Printf("error parsing queue time for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						op.RTT, err = strconv.ParseInt(stats[6], 10, 64)
-						if err != nil {
-							log.Printf("error parsing rtt for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						op.ExecuteTime, err = strconv.ParseInt(stats[7], 10, 64)
-						if err != nil {
-							log.Printf("error parsing execute time for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-						}
-						if len(stats) > 8 {
-							op.Errors, err = strconv.ParseInt(stats[8], 10, 64)
-							if err != nil {
-								log.Printf("error parsing errors for %s on mount %s: %v", opName, currentMount.MountPoint, err)
-							}
-						}
-						
-						currentMount.Operations[opName] = op
-					}
-				}
-			}
-		}
+	parser := &mountstatsParser{
+		scanner: bufio.NewScanner(file),
+		mounts:  make(map[string]*NFSMount),
 	}
-	
-	return mounts, scanner.Err()
+
+	if err := parser.parse(); err != nil {
+		return nil, err
+	}
+
+	return parser.mounts, nil
 }
+			
 
 // calculateDelta computes the difference between two measurements.
 func calculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *DeltaStats {
@@ -318,7 +349,7 @@ func calculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *D
 	return delta
 }
 
-// displayStatsNfsiostat shows stats in nfsiostat format. 
+// displayStatsNfsiostat shows stats in nfsiostat format.
 func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *NFSMount, showAttr bool) {
 	// Calculate total ops/s
 	totalOps := float64(0)
@@ -327,21 +358,21 @@ func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *
 			totalOps += s.IOPS
 		}
 	}
-	
+
 	// Print mount header and summary
 	fmt.Printf("\n%s mounted on %s:\n\n", mount.Device, mount.MountPoint)
 	fmt.Printf("%16s %16s\n", "ops/s", "rpc bklog")
 	fmt.Printf("%16.3f %16.3f\n\n", totalOps, 0.000)
-	
+
 	// Print per-operation statistics
 	for _, s := range stats {
 		if s == nil || s.DeltaOps == 0 {
 			continue
 		}
-		
+
 		opName := strings.ToLower(s.Operation)
 		fmt.Printf("%s:", opName)
-		
+
 		// Calculate error and retrans percentages
 		errorPct := float64(0)
 		if s.DeltaOps > 0 {
@@ -351,17 +382,17 @@ func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *
 		if s.DeltaOps > 0 {
 			retransPct = float64(s.DeltaRetrans) / float64(s.DeltaOps) * 100
 		}
-		
+
 		// Print header for this operation
 		fmt.Printf("%16s %16s %16s %16s %16s %16s %16s %16s\n",
 			"ops/s", "kB/s", "kB/op", "retrans", "avg RTT (ms)", "avg exe (ms)", "avg queue (ms)", "errors")
-		
+
 		// Print values
 		fmt.Printf("%26.3f %16.3f %16.3f %8d (%.1f%%) %16.3f %16.3f %16.3f %8d (%.1f%%)\n",
 			s.IOPS, s.KBPerSec, s.KBPerOp, s.DeltaRetrans, retransPct,
 			s.AvgRTT, s.AvgExec, s.AvgQueue, s.DeltaErrors, errorPct)
 	}
-	
+
 	// Print attribute cache statistics if requested
 	if showAttr && previousMount != nil {
 		fmt.Printf("\n")
@@ -369,7 +400,7 @@ func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *
 		inodeRevals := mount.Events.InodeRevalidate - previousMount.Events.InodeRevalidate
 		pageInvals := mount.Events.DataInvalidate - previousMount.Events.DataInvalidate
 		attrInvals := mount.Events.AttrInvalidate - previousMount.Events.AttrInvalidate
-		
+
 		fmt.Printf("%d VFS opens\n", vfsOpens)
 		fmt.Printf("%d inoderevalidates (forced GETATTRs)\n", inodeRevals)
 		fmt.Printf("%d page cache invalidations\n", pageInvals)
@@ -377,7 +408,7 @@ func displayStatsNfsiostat(mount *NFSMount, stats []*DeltaStats, previousMount *
 	}
 }
 
-// displayStatsSimple shows stats in simple format with optional bandwidth. 
+// displayStatsSimple shows stats in simple format with optional bandwidth.
 func displayStatsSimple(mount *NFSMount, stats []*DeltaStats, showBandwidth bool, timestamp time.Time) {
 	if len(stats) == 0 {
 		return
@@ -395,7 +426,7 @@ func displayStatsSimple(mount *NFSMount, stats []*DeltaStats, showBandwidth bool
 			"Operation", "IOPS", "Avg RTT(ms)", "Avg Exec(ms)")
 		fmt.Println(strings.Repeat("-", 52))
 	}
-	
+
 	// Print stats for each operation
 	for _, s := range stats {
 		if s == nil || s.DeltaOps == 0 {
