@@ -1,4 +1,4 @@
-//go:build linux
+//go:build !linux
 
 package main
 
@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -316,7 +315,7 @@ func parseMountstatsReader(r io.Reader) (map[string]*NFSMount, error) {
 
 	return parser.mounts, nil
 }
-			
+
 
 // calculateDelta computes the difference between two measurements.
 func calculateDelta(previousOp, currentOp *NFSOperation, durationSec float64) *DeltaStats {
