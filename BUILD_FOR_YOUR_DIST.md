@@ -35,7 +35,7 @@ All major Linux distributions released after 2007 are supported:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/nfs-gaze.git
+git clone https://github.com/blakegolliher/nfs-gaze.git
 cd nfs-gaze
 
 # Build the binary
@@ -79,7 +79,7 @@ Release:        1%{?dist}
 Summary:        Real-time NFS performance monitoring tool
 
 License:        MIT
-URL:            https://github.com/yourusername/nfs-gaze
+URL:            https://github.com/blakegolliher/nfs-gaze
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  golang >= 1.21
@@ -185,7 +185,7 @@ Priority: optional
 Maintainer: Your Name <your.email@example.com>
 Build-Depends: debhelper (>= 9), golang-go (>= 1.21)
 Standards-Version: 4.5.0
-Homepage: https://github.com/yourusername/nfs-gaze
+Homepage: https://github.com/blakegolliher/nfs-gaze
 
 Package: nfs-gaze
 Architecture: any
@@ -254,7 +254,7 @@ Create `debian/copyright`:
 ```
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: nfs-gaze
-Source: https://github.com/yourusername/nfs-gaze
+Source: https://github.com/blakegolliher/nfs-gaze
 
 Files: *
 Copyright: 2025 Your Name <your.email@example.com>
