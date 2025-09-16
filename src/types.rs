@@ -29,41 +29,41 @@ pub struct NFSOperation {
     pub timeouts: i64,
     pub bytes_sent: i64,
     pub bytes_recv: i64,
-    pub queue_time: i64,  // milliseconds
-    pub rtt: i64,         // milliseconds
+    pub queue_time: i64,   // milliseconds
+    pub rtt: i64,          // milliseconds
     pub execute_time: i64, // milliseconds
     pub errors: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NFSEvents {
-    pub inode_revalidate: i64,    // index 0
-    pub dentry_revalidate: i64,   // index 1
-    pub data_invalidate: i64,     // index 2
-    pub attr_invalidate: i64,     // index 3
-    pub vfs_open: i64,            // index 4
-    pub vfs_lookup: i64,          // index 5
-    pub vfs_access: i64,          // index 6
-    pub vfs_update_page: i64,     // index 7
-    pub vfs_read_page: i64,       // index 8
-    pub vfs_read_pages: i64,      // index 9
-    pub vfs_write_page: i64,      // index 10
-    pub vfs_write_pages: i64,     // index 11
-    pub vfs_getdents: i64,        // index 12
-    pub vfs_setattr: i64,         // index 13
-    pub vfs_flush: i64,           // index 14
-    pub vfs_fsync: i64,           // index 15
-    pub vfs_lock: i64,            // index 16
-    pub vfs_release: i64,         // index 17
-    pub congestion_wait: i64,     // index 18
-    pub setattr_trunc: i64,       // index 19
-    pub extend_write: i64,        // index 20
-    pub silly_rename: i64,        // index 21
-    pub short_read: i64,          // index 22
-    pub short_write: i64,         // index 23
-    pub delay: i64,               // index 24
-    pub pnfs_read: i64,           // index 25
-    pub pnfs_write: i64,          // index 26
+    pub inode_revalidate: i64,  // index 0
+    pub dentry_revalidate: i64, // index 1
+    pub data_invalidate: i64,   // index 2
+    pub attr_invalidate: i64,   // index 3
+    pub vfs_open: i64,          // index 4
+    pub vfs_lookup: i64,        // index 5
+    pub vfs_access: i64,        // index 6
+    pub vfs_update_page: i64,   // index 7
+    pub vfs_read_page: i64,     // index 8
+    pub vfs_read_pages: i64,    // index 9
+    pub vfs_write_page: i64,    // index 10
+    pub vfs_write_pages: i64,   // index 11
+    pub vfs_getdents: i64,      // index 12
+    pub vfs_setattr: i64,       // index 13
+    pub vfs_flush: i64,         // index 14
+    pub vfs_fsync: i64,         // index 15
+    pub vfs_lock: i64,          // index 16
+    pub vfs_release: i64,       // index 17
+    pub congestion_wait: i64,   // index 18
+    pub setattr_trunc: i64,     // index 19
+    pub extend_write: i64,      // index 20
+    pub silly_rename: i64,      // index 21
+    pub short_read: i64,        // index 22
+    pub short_write: i64,       // index 23
+    pub delay: i64,             // index 24
+    pub pnfs_read: i64,         // index 25
+    pub pnfs_write: i64,        // index 26
 }
 
 #[derive(Debug, Clone, PartialEq)]

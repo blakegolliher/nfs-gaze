@@ -2,7 +2,7 @@
 
 Real-time NFS performance monitoring with per-operation latency tracking. Monitor your NFS client I/O statistics on Linux systems with detailed, operation-specific metrics that go beyond traditional tools.
 
-**🦀 Now implemented in Rust** for improved performance, memory safety, and reliability!
+**🦀 Now fully implemented in Rust** - complete migration from Go for improved performance, memory safety, and reliability!
 
 ## Key Features
 
@@ -61,12 +61,6 @@ cargo build --release
 sudo cp target/release/nfs-gaze /usr/local/bin/
 ```
 
-### From Source (Legacy Go Version)
-
-```bash
-# Build the Go version (if needed for compatibility)
-go build -o nfs-gaze-go .
-```
 
 ### Requirements
 
@@ -293,30 +287,38 @@ cargo install cargo-llvm-cov
 cargo llvm-cov --html
 ```
 
-## Migration from Go Version
+## Migration from Go (Completed!)
 
-### Command-Line Compatibility
+This project has been **completely migrated from Go to Rust**! The original ~2,051 lines of Go code have been replaced with a modern Rust implementation.
 
-The Rust version maintains 100% CLI compatibility with the Go version:
+### What Changed
+
+- **Complete rewrite** in Rust with improved architecture
+- **39 comprehensive tests** covering all functionality
+- **Enhanced error handling** using Result types
+- **Memory safety** without garbage collection
+- **Better performance** through zero-cost abstractions
+- **Modern async support** with tokio for signal handling
+- **Type safety** preventing entire classes of bugs
+
+### CLI Compatibility
+
+100% command-line compatibility is maintained:
 
 ```bash
-# These commands work identically in both versions
+# All these commands work exactly as before
 ./nfs-gaze -m /mnt/nfs --bw
 ./nfs-gaze --ops READ,WRITE -i 2 -c 10
+./nfs-gaze --clear -i 1
 ```
 
 ### Performance Improvements
 
-The Rust version offers several advantages:
-
-- **Memory Safety**: No memory leaks or buffer overflows
+- **Memory Safety**: Zero memory leaks or buffer overflows
 - **Performance**: ~20-30% faster parsing and lower memory usage
-- **Reliability**: Better error handling and recovery
-- **Binary Size**: Smaller static binaries
-
-### Breaking Changes
-
-None! The Rust version is a drop-in replacement for the Go version.
+- **Reliability**: Robust error handling and graceful recovery
+- **Binary Size**: Smaller optimized binaries
+- **Thread Safety**: Built-in concurrency safety
 
 ## Troubleshooting
 

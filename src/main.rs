@@ -1,16 +1,22 @@
-use clap::Parser;
-use nfs_gaze::cli::{Args, parse_operations_filter};
-use nfs_gaze::parser::parse_mountstats;
-use nfs_gaze::monitor::Monitor;
-use std::io::stdout;
-use std::time::Duration;
-
 fn main() -> anyhow::Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
         eprintln!("This application only works on Linux");
         std::process::exit(1);
     }
+
+    #[cfg(target_os = "linux")]
+    run_linux()
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux() -> anyhow::Result<()> {
+    use clap::Parser;
+    use nfs_gaze::cli::{parse_operations_filter, Args};
+    use nfs_gaze::monitor::Monitor;
+    use nfs_gaze::parser::parse_mountstats;
+    use std::io::stdout;
+    use std::time::Duration;
 
     let args = Args::parse();
 
@@ -21,7 +27,10 @@ fn main() -> anyhow::Result<()> {
     let initial_mounts = match parse_mountstats(&args.mountstats_path) {
         Ok(mounts) => mounts,
         Err(e) => {
-            eprintln!("Error reading mountstats from {}: {}", args.mountstats_path, e);
+            eprintln!(
+                "Error reading mountstats from {}: {}",
+                args.mountstats_path, e
+            );
             std::process::exit(1);
         }
     };
@@ -32,13 +41,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Determine which mounts to monitor
-    let monitor_mounts = match Monitor::get_mounts_to_monitor(args.mount_point.clone(), &initial_mounts) {
-        Ok(mounts) => mounts,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let monitor_mounts =
+        match Monitor::get_mounts_to_monitor(args.mount_point.clone(), &initial_mounts) {
+            Ok(mounts) => mounts,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        };
 
     if monitor_mounts.is_empty() {
         eprintln!("No matching NFS mounts found to monitor");

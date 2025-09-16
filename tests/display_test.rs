@@ -1,7 +1,7 @@
-use nfs_gaze::{DeltaStats, NFSMount};
+use chrono::{TimeZone, Utc};
 use nfs_gaze::display::display_stats_simple;
+use nfs_gaze::{DeltaStats, NFSMount};
 use std::collections::HashMap;
-use chrono::{Utc, TimeZone};
 use std::io::{self, Write};
 
 // Mock writer to capture output instead of writing to stdout
@@ -89,10 +89,22 @@ fn test_display_stats_simple_without_bandwidth() {
     display_stats_simple(&mut writer, &mount, &stats, false, &timestamp).unwrap();
     let output = writer.to_string();
 
-    assert!(output.contains("READ"), "Output should contain READ operation");
-    assert!(output.contains("WRITE"), "Output should contain WRITE operation");
-    assert!(output.contains("100.0"), "Output should contain IOPS for READ");
-    assert!(!output.contains("MB/s"), "Output should not contain bandwidth columns");
+    assert!(
+        output.contains("READ"),
+        "Output should contain READ operation"
+    );
+    assert!(
+        output.contains("WRITE"),
+        "Output should contain WRITE operation"
+    );
+    assert!(
+        output.contains("100.0"),
+        "Output should contain IOPS for READ"
+    );
+    assert!(
+        !output.contains("MB/s"),
+        "Output should not contain bandwidth columns"
+    );
 }
 
 #[test]
@@ -154,10 +166,22 @@ fn test_display_stats_simple_with_bandwidth() {
     display_stats_simple(&mut writer, &mount, &stats, true, &timestamp).unwrap();
     let output = writer.to_string();
 
-    assert!(output.contains("READ"), "Output should contain READ operation");
-    assert!(output.contains("WRITE"), "Output should contain WRITE operation");
-    assert!(output.contains("MB/s"), "Output should contain bandwidth column");
-    assert!(output.contains("KB/op"), "Output should contain KB/op column");
+    assert!(
+        output.contains("READ"),
+        "Output should contain READ operation"
+    );
+    assert!(
+        output.contains("WRITE"),
+        "Output should contain WRITE operation"
+    );
+    assert!(
+        output.contains("MB/s"),
+        "Output should contain bandwidth column"
+    );
+    assert!(
+        output.contains("KB/op"),
+        "Output should contain KB/op column"
+    );
 }
 
 #[test]
@@ -182,7 +206,10 @@ fn test_display_stats_simple_empty_stats() {
     let output = writer.to_string();
 
     // Should have minimal output for empty stats
-    assert!(output.is_empty() || output.trim().is_empty(), "Output should be empty for empty stats");
+    assert!(
+        output.is_empty() || output.trim().is_empty(),
+        "Output should be empty for empty stats"
+    );
 }
 
 #[test]

@@ -47,8 +47,8 @@ fn test_cli_with_operations_filter() {
 
 #[test]
 fn test_cli_with_custom_interval() {
-    let args = Args::try_parse_from(&["nfs-gaze", "-i", "5"])
-        .expect("Should parse with custom interval");
+    let args =
+        Args::try_parse_from(&["nfs-gaze", "-i", "5"]).expect("Should parse with custom interval");
 
     assert_eq!(args.mount_point, None);
     assert_eq!(args.operations, None);
@@ -63,15 +63,10 @@ fn test_cli_with_custom_interval() {
 #[test]
 fn test_cli_with_all_flags() {
     let args = Args::try_parse_from(&[
-        "nfs-gaze",
-        "-m", "/mnt/nfs",
-        "--ops", "READ",
-        "-i", "2",
-        "-c", "10",
-        "--attr",
-        "--bw",
-        "--clear"
-    ]).expect("Should parse with all flags");
+        "nfs-gaze", "-m", "/mnt/nfs", "--ops", "READ", "-i", "2", "-c", "10", "--attr", "--bw",
+        "--clear",
+    ])
+    .expect("Should parse with all flags");
 
     assert_eq!(args.mount_point, Some("/mnt/nfs".to_string()));
     assert_eq!(args.operations, Some("READ".to_string()));

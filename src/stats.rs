@@ -114,11 +114,15 @@ fn calculate_operation_delta(
 }
 
 /// Filter operations based on a set of allowed operation names
-pub fn filter_operations(stats: Vec<DeltaStats>, filter: &std::collections::HashSet<String>) -> Vec<DeltaStats> {
+pub fn filter_operations(
+    stats: Vec<DeltaStats>,
+    filter: &std::collections::HashSet<String>,
+) -> Vec<DeltaStats> {
     if filter.is_empty() {
         stats
     } else {
-        stats.into_iter()
+        stats
+            .into_iter()
             .filter(|stat| filter.contains(&stat.operation))
             .collect()
     }
@@ -143,7 +147,14 @@ mod tests {
         }
     }
 
-    fn create_test_operation(name: &str, ops: i64, bytes_sent: i64, bytes_recv: i64, rtt: i64, exec: i64) -> NFSOperation {
+    fn create_test_operation(
+        name: &str,
+        ops: i64,
+        bytes_sent: i64,
+        bytes_recv: i64,
+        rtt: i64,
+        exec: i64,
+    ) -> NFSOperation {
         NFSOperation {
             name: name.to_string(),
             ops,
@@ -161,10 +172,16 @@ mod tests {
     #[test]
     fn test_calculate_delta_stats() {
         let mut prev_ops = HashMap::new();
-        prev_ops.insert("READ".to_string(), create_test_operation("READ", 100, 1024, 2048, 1000, 2000));
+        prev_ops.insert(
+            "READ".to_string(),
+            create_test_operation("READ", 100, 1024, 2048, 1000, 2000),
+        );
 
         let mut curr_ops = HashMap::new();
-        curr_ops.insert("READ".to_string(), create_test_operation("READ", 200, 2048, 4096, 2000, 4000));
+        curr_ops.insert(
+            "READ".to_string(),
+            create_test_operation("READ", 200, 2048, 4096, 2000, 4000),
+        );
 
         let previous = create_test_mount(prev_ops);
         let current = create_test_mount(curr_ops);
@@ -186,7 +203,10 @@ mod tests {
         let prev_ops = HashMap::new();
 
         let mut curr_ops = HashMap::new();
-        curr_ops.insert("READ".to_string(), create_test_operation("READ", 100, 1024, 2048, 1000, 2000));
+        curr_ops.insert(
+            "READ".to_string(),
+            create_test_operation("READ", 100, 1024, 2048, 1000, 2000),
+        );
 
         let previous = create_test_mount(prev_ops);
         let current = create_test_mount(curr_ops);

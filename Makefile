@@ -1,90 +1,64 @@
 NAME := nfs-gaze
 VERSION := 1.0.0
-GOFLAGS := -ldflags="-s -w"
 
-.PHONY: all build clean test coverage coverage-md coverage-html install uninstall
+.PHONY: all build clean test coverage install uninstall help
 
 all: build
 
 build:
-	go build $(GOFLAGS) -o $(NAME)
+	cargo build --release
 
 test:
-	go test -v -cover ./...
+	cargo test
 
 clean:
-	rm -f $(NAME)
+	cargo clean
 	rm -rf dist/
 	rm -f *.rpm *.deb
-	rm -f tests/coverage.out tests/coverage.html tests/COVERAGE.md
-	rm -f coverage.out coverage.html
+	rm -rf coverage/
 
 install: build
-	install -D -m 755 $(NAME) $(DESTDIR)/usr/bin/$(NAME)
+	install -D -m 755 target/release/$(NAME) $(DESTDIR)/usr/bin/$(NAME)
 
 uninstall:
 	rm -f $(DESTDIR)/usr/bin/$(NAME)
 
 # Coverage targets
-coverage: coverage-md
-
-coverage-md:
-	@echo "Generating markdown coverage report..."
-	@go test -coverprofile=tests/coverage.out ./... > /dev/null 2>&1
-	@go run tests/coverage_to_md.go > tests/COVERAGE.md
-	@echo "Coverage report generated in tests/COVERAGE.md"
-	@echo "Overall coverage: $$(go tool cover -func=tests/coverage.out | grep total | awk '{print $$3}')"
-
-coverage-html:
-	@echo "Generating HTML coverage report..."
-	@go test -coverprofile=tests/coverage.out ./... > /dev/null 2>&1
-	@go tool cover -html=tests/coverage.out
-	@echo "Coverage report opened in browser"
-
-# Build distribution packages
-dist: dist-rpm dist-deb
-
-dist-rpm:
-	mkdir -p dist/rpm
-	# Add RPM building commands here
-	@echo "RPM package built in dist/rpm/"
-
-dist-deb:
-	mkdir -p dist/deb
-	# Add DEB building commands here
-	@echo "DEB package built in dist/deb/"
+coverage:
+	@echo "Generating test coverage report..."
+	@mkdir -p coverage
+	@export PATH="$$HOME/.cargo/bin:$$PATH" && cargo test > /dev/null 2>&1
+	@export PATH="$$HOME/.cargo/bin:$$PATH" && ./scripts/coverage.sh
+	@echo "Coverage report generated in coverage/README.md"
 
 # Development helpers
 dev-deps:
-	go mod download
-	go install golang.org/x/tools/cmd/goimports@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	rustup update
+	cargo install cargo-edit
 
 fmt:
-	go fmt ./...
-	goimports -w .
+	cargo fmt
 
 lint:
-	golangci-lint run
+	cargo clippy -- -D warnings
 
 # Quick development cycle
-dev: fmt test coverage-md
+dev: fmt test coverage
 
-# Watch for changes and run tests (requires entr)
+# Watch for changes and run tests (requires cargo-watch)
 watch:
-	find . -name '*.go' | entr -c make test
+	cargo watch -x test
 
 help:
 	@echo "Available targets:"
-	@echo "  build        - Build the binary"
+	@echo "  build        - Build the release binary"
 	@echo "  test         - Run tests"
-	@echo "  coverage     - Generate markdown coverage report"
-	@echo "  coverage-md  - Generate markdown coverage report"
-	@echo "  coverage-html- Open HTML coverage in browser"
-	@echo "  clean        - Remove built files and reports"
+	@echo "  coverage     - Generate test coverage report"
+	@echo "  clean        - Remove built files"
 	@echo "  install      - Install binary to system"
 	@echo "  uninstall    - Remove installed binary"
 	@echo "  fmt          - Format code"
-	@echo "  lint         - Run linter"
+	@echo "  lint         - Run clippy linter"
 	@echo "  dev          - Format, test, and generate coverage"
+	@echo "  watch        - Watch for changes and run tests"
 	@echo "  help         - Show this help message"

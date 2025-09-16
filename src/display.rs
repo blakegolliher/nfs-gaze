@@ -16,7 +16,11 @@ pub fn display_stats_simple<W: Write>(
 
     // Write header information
     writeln!(writer, "{} mounted on {}", mount.device, mount.mount_point)?;
-    writeln!(writer, "Timestamp: {}", timestamp.format("%Y-%m-%d %H:%M:%S UTC"))?;
+    writeln!(
+        writer,
+        "Timestamp: {}",
+        timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+    )?;
     writeln!(writer)?;
 
     // Write table headers
@@ -76,8 +80,6 @@ pub fn display_stats_simple<W: Write>(
 pub fn format_duration(ms: i64) -> String {
     if ms == 0 {
         "0.0ms".to_string()
-    } else if ms < 1000 {
-        format!("{:.1}ms", ms as f64 / 1000.0)
     } else {
         format!("{:.1}ms", ms as f64 / 1000.0)
     }
@@ -87,8 +89,6 @@ pub fn format_duration(ms: i64) -> String {
 pub fn format_rate(rate: f64) -> String {
     if rate == 0.0 {
         "0.0".to_string()
-    } else if rate < 10.0 {
-        format!("{:.1}", rate)
     } else {
         format!("{:.1}", rate)
     }

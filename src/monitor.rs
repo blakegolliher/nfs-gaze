@@ -1,15 +1,15 @@
-use crate::types::{NFSMount, Result};
+use crate::display::display_stats_simple;
 use crate::parser::parse_mountstats;
 use crate::stats::{calculate_delta_stats, filter_operations};
-use crate::display::display_stats_simple;
+use crate::types::{NFSMount, Result};
+use chrono::Utc;
+use signal_hook::{consts::SIGINT, consts::SIGTERM, iterator::Signals};
 use std::collections::{HashMap, HashSet};
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use std::thread;
-use std::io::{self, Write};
-use signal_hook::{consts::SIGTERM, consts::SIGINT, iterator::Signals};
-use chrono::Utc;
+use std::time::{Duration, Instant};
 
 /// Main monitoring structure
 pub struct Monitor {
@@ -28,10 +28,9 @@ impl Monitor {
         let running = self.running.clone();
 
         thread::spawn(move || {
-            let mut signals = Signals::new(&[SIGINT, SIGTERM]).unwrap();
-            for _sig in signals.forever() {
+            let mut signals = Signals::new([SIGINT, SIGTERM]).unwrap();
+            if let Some(_sig) = signals.forever().next() {
                 running.store(false, Ordering::SeqCst);
-                break;
             }
         });
     }
@@ -154,11 +153,8 @@ impl Monitor {
             for current_mount in &current_monitor_mounts {
                 if let Some(previous_mount) = previous_mounts.get(&current_mount.mount_point) {
                     // Calculate delta statistics
-                    let mut delta_stats = calculate_delta_stats(
-                        previous_mount,
-                        current_mount,
-                        elapsed_seconds,
-                    );
+                    let mut delta_stats =
+                        calculate_delta_stats(previous_mount, current_mount, elapsed_seconds);
 
                     // Filter operations if specified
                     delta_stats = filter_operations(delta_stats, &operations_filter);
@@ -214,13 +210,18 @@ mod tests {
     #[test]
     fn test_get_mounts_to_monitor_specific() {
         let mut available_mounts = HashMap::new();
-        available_mounts.insert("/mnt/nfs1".to_string(), create_test_mount("/mnt/nfs1", "server1:/export1"));
-        available_mounts.insert("/mnt/nfs2".to_string(), create_test_mount("/mnt/nfs2", "server2:/export2"));
+        available_mounts.insert(
+            "/mnt/nfs1".to_string(),
+            create_test_mount("/mnt/nfs1", "server1:/export1"),
+        );
+        available_mounts.insert(
+            "/mnt/nfs2".to_string(),
+            create_test_mount("/mnt/nfs2", "server2:/export2"),
+        );
 
-        let result = Monitor::get_mounts_to_monitor(
-            Some("/mnt/nfs1".to_string()),
-            &available_mounts,
-        ).unwrap();
+        let result =
+            Monitor::get_mounts_to_monitor(Some("/mnt/nfs1".to_string()), &available_mounts)
+                .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].mount_point, "/mnt/nfs1");
@@ -229,8 +230,14 @@ mod tests {
     #[test]
     fn test_get_mounts_to_monitor_all() {
         let mut available_mounts = HashMap::new();
-        available_mounts.insert("/mnt/nfs1".to_string(), create_test_mount("/mnt/nfs1", "server1:/export1"));
-        available_mounts.insert("/mnt/nfs2".to_string(), create_test_mount("/mnt/nfs2", "server2:/export2"));
+        available_mounts.insert(
+            "/mnt/nfs1".to_string(),
+            create_test_mount("/mnt/nfs1", "server1:/export1"),
+        );
+        available_mounts.insert(
+            "/mnt/nfs2".to_string(),
+            create_test_mount("/mnt/nfs2", "server2:/export2"),
+        );
 
         let result = Monitor::get_mounts_to_monitor(None, &available_mounts).unwrap();
 
@@ -241,10 +248,8 @@ mod tests {
     fn test_get_mounts_to_monitor_not_found() {
         let available_mounts = HashMap::new();
 
-        let result = Monitor::get_mounts_to_monitor(
-            Some("/mnt/nonexistent".to_string()),
-            &available_mounts,
-        );
+        let result =
+            Monitor::get_mounts_to_monitor(Some("/mnt/nonexistent".to_string()), &available_mounts);
 
         assert!(result.is_err());
     }
@@ -258,12 +263,7 @@ mod tests {
         ];
         let operations_filter = HashSet::new();
 
-        Monitor::print_initial_summary(
-            &mut buffer,
-            &None,
-            &mounts,
-            &operations_filter,
-        ).unwrap();
+        Monitor::print_initial_summary(&mut buffer, &None, &mounts, &operations_filter).unwrap();
 
         let output = String::from_utf8(buffer).unwrap();
         assert!(output.contains("NFS I/O Statistics Monitor"));
@@ -285,7 +285,8 @@ mod tests {
             &Some("/mnt/nfs".to_string()),
             &mounts,
             &operations_filter,
-        ).unwrap();
+        )
+        .unwrap();
 
         let output = String::from_utf8(buffer).unwrap();
         assert!(output.contains("Monitoring mount point: /mnt/nfs"));

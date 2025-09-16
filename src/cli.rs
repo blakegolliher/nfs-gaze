@@ -57,13 +57,11 @@ pub struct Args {
 /// Parse operations filter string into a HashSet of operation names
 pub fn parse_operations_filter(operations: Option<String>) -> HashSet<String> {
     match operations {
-        Some(ops_str) if !ops_str.trim().is_empty() => {
-            ops_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        }
+        Some(ops_str) if !ops_str.trim().is_empty() => ops_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
         _ => HashSet::new(),
     }
 }

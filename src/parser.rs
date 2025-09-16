@@ -10,10 +10,12 @@ pub fn parse_events(parts: &[String]) -> Result<NFSEvents> {
     }
 
     let parse_int = |index: usize, field: &str| -> Result<i64> {
-        parts[index].parse::<i64>().map_err(|e| NfsGazeError::FieldParseError {
-            field: field.to_string(),
-            source: e,
-        })
+        parts[index]
+            .parse::<i64>()
+            .map_err(|e| NfsGazeError::FieldParseError {
+                field: field.to_string(),
+                source: e,
+            })
     };
 
     let mut events = NFSEvents {
@@ -68,10 +70,12 @@ pub fn parse_nfs_operation(op_name: &str, stats: &[String]) -> Result<NFSOperati
     }
 
     let parse_int = |index: usize, field: &str| -> Result<i64> {
-        stats[index].parse::<i64>().map_err(|e| NfsGazeError::FieldParseError {
-            field: format!("{}_{}", op_name, field),
-            source: e,
-        })
+        stats[index]
+            .parse::<i64>()
+            .map_err(|e| NfsGazeError::FieldParseError {
+                field: format!("{}_{}", op_name, field),
+                source: e,
+            })
     };
 
     let mut operation = NFSOperation {
@@ -131,14 +135,20 @@ impl MountstatsParser {
         // Example: "device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1"
         let parts: Vec<&str> = line.splitn(2, " on ").collect();
         if parts.len() != 2 {
-            return Err(NfsGazeError::ParseError(format!("Invalid device line: {}", line)));
+            return Err(NfsGazeError::ParseError(format!(
+                "Invalid device line: {}",
+                line
+            )));
         }
 
         let device_info: Vec<&str> = parts[0].split_whitespace().collect();
         let mount_info: Vec<&str> = parts[1].split_whitespace().collect();
 
         if device_info.len() < 2 || mount_info.is_empty() {
-            return Err(NfsGazeError::ParseError(format!("Invalid device info: {}", line)));
+            return Err(NfsGazeError::ParseError(format!(
+                "Invalid device info: {}",
+                line
+            )));
         }
 
         let server_export = device_info[1];
@@ -184,7 +194,8 @@ impl MountstatsParser {
             && !line.starts_with("caps")
             && !line.starts_with("sec")
             && !line.starts_with("nfsv4")
-            && !line.starts_with("nfsv3") {
+            && !line.starts_with("nfsv3")
+        {
             self.parse_operation(line)
         } else {
             Ok(())
@@ -194,14 +205,19 @@ impl MountstatsParser {
     fn parse_age(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 2 {
-            return Err(NfsGazeError::ParseError(format!("Invalid age line: {}", line)));
+            return Err(NfsGazeError::ParseError(format!(
+                "Invalid age line: {}",
+                line
+            )));
         }
 
         if let Some(ref mut mount) = self.current_mount {
-            mount.age = parts[1].parse().map_err(|e| NfsGazeError::FieldParseError {
-                field: "age".to_string(),
-                source: e,
-            })?;
+            mount.age = parts[1]
+                .parse()
+                .map_err(|e| NfsGazeError::FieldParseError {
+                    field: "age".to_string(),
+                    source: e,
+                })?;
 
             // Update in mounts map
             if let Some(existing_mount) = self.mounts.get_mut(&mount.mount_point) {
@@ -214,7 +230,10 @@ impl MountstatsParser {
     fn parse_events_line(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 2 {
-            return Err(NfsGazeError::ParseError(format!("Invalid events line: {}", line)));
+            return Err(NfsGazeError::ParseError(format!(
+                "Invalid events line: {}",
+                line
+            )));
         }
 
         let event_parts: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
@@ -234,25 +253,34 @@ impl MountstatsParser {
     fn parse_bytes(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 6 {
-            return Err(NfsGazeError::ParseError(format!("Invalid bytes line: {}", line)));
+            return Err(NfsGazeError::ParseError(format!(
+                "Invalid bytes line: {}",
+                line
+            )));
         }
 
         if let Some(ref mut mount) = self.current_mount {
-            mount.bytes_read = parts[1].parse().map_err(|e| NfsGazeError::FieldParseError {
-                field: "bytes_read".to_string(),
-                source: e,
-            })?;
+            mount.bytes_read = parts[1]
+                .parse()
+                .map_err(|e| NfsGazeError::FieldParseError {
+                    field: "bytes_read".to_string(),
+                    source: e,
+                })?;
             // Handle different formats - try both index 5 and 6
             mount.bytes_write = if parts.len() > 6 && parts[6] != "0" {
-                parts[6].parse().map_err(|e| NfsGazeError::FieldParseError {
-                    field: "bytes_write".to_string(),
-                    source: e,
-                })?
+                parts[6]
+                    .parse()
+                    .map_err(|e| NfsGazeError::FieldParseError {
+                        field: "bytes_write".to_string(),
+                        source: e,
+                    })?
             } else if parts.len() > 5 {
-                parts[5].parse().map_err(|e| NfsGazeError::FieldParseError {
-                    field: "bytes_write".to_string(),
-                    source: e,
-                })?
+                parts[5]
+                    .parse()
+                    .map_err(|e| NfsGazeError::FieldParseError {
+                        field: "bytes_write".to_string(),
+                        source: e,
+                    })?
             } else {
                 0
             };
@@ -269,20 +297,30 @@ impl MountstatsParser {
     fn parse_operation(&mut self, line: &str) -> Result<()> {
         let op_parts: Vec<&str> = line.splitn(2, ':').collect();
         if op_parts.len() != 2 {
-            return Err(NfsGazeError::ParseError(format!("Invalid operation line: {}", line)));
+            return Err(NfsGazeError::ParseError(format!(
+                "Invalid operation line: {}",
+                line
+            )));
         }
 
         let op_name = op_parts[0].trim();
-        let stats: Vec<String> = op_parts[1].split_whitespace().map(|s| s.to_string()).collect();
+        let stats: Vec<String> = op_parts[1]
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
 
         let operation = parse_nfs_operation(op_name, &stats)?;
 
         if let Some(ref mut mount) = self.current_mount {
-            mount.operations.insert(op_name.to_string(), operation.clone());
+            mount
+                .operations
+                .insert(op_name.to_string(), operation.clone());
 
             // Update in mounts map
             if let Some(existing_mount) = self.mounts.get_mut(&mount.mount_point) {
-                existing_mount.operations.insert(op_name.to_string(), operation);
+                existing_mount
+                    .operations
+                    .insert(op_name.to_string(), operation);
             }
         }
         Ok(())
