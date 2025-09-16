@@ -45,13 +45,24 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 
 ### Pre-built Binaries
 
-Download the latest release for your platform from the [Releases](https://github.com/yourusername/nfs-gaze/releases) page.
+**Option 1: GitHub Releases**
+Download the latest release for your platform from the [Releases](https://github.com/blakegolliher/nfs-gaze/releases) page.
+
+**Option 2: Repository Binary**
+A precompiled Linux x86_64 binary is available in the `releases/` directory:
+```bash
+# Clone and use the prebuilt binary
+git clone https://github.com/blakegolliher/nfs-gaze
+cd nfs-gaze
+chmod +x releases/nfs-gaze-linux-x86_64
+sudo cp releases/nfs-gaze-linux-x86_64 /usr/local/bin/nfs-gaze
+```
 
 ### From Source (Rust)
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/nfs-gaze
+git clone https://github.com/blakegolliher/nfs-gaze
 cd nfs-gaze
 
 # Build optimized release binary
@@ -239,7 +250,7 @@ Common operations you can monitor:
 
 ```bash
 # Clone and build
-git clone https://github.com/yourusername/nfs-gaze
+git clone https://github.com/blakegolliher/nfs-gaze
 cd nfs-gaze
 
 # Debug build (with debug symbols)
@@ -413,7 +424,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 ```bash
 # Clone and setup development environment
-git clone https://github.com/yourusername/nfs-gaze
+git clone https://github.com/blakegolliher/nfs-gaze
 cd nfs-gaze
 
 # Install development dependencies
