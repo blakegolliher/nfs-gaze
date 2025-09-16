@@ -2,7 +2,7 @@
 
 Real-time NFS performance monitoring with per-operation latency tracking. Monitor your NFS client I/O statistics on Linux systems with detailed, operation-specific metrics that go beyond traditional tools.
 
-**🦀 Now fully implemented in Rust** - complete migration from Go for improved performance, memory safety, and reliability!
+**Now fully implemented in Rust** - complete migration from Go for improved performance, memory safety, and reliability!
 
 ## Key Features
 
@@ -13,6 +13,7 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 - **Clear Output Format**: Detailed performance metrics in an easy-to-read display
 - **Memory Safe**: Built with Rust for zero memory leaks and thread safety
 - **High Performance**: Optimized for minimal overhead monitoring
+- **Observability Ready**: Optional Prometheus and OpenTelemetry metrics export
 
 ## Why nfs-gaze?
 
@@ -20,14 +21,16 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 
 | Feature | nfs-gaze | nfsstat | nfsslower (bcc) |
 |---------|----------|---------|-----------------|
-| Per-operation latency | ✅ | ❌ | ✅ |
-| No kernel modules needed | ✅ | ✅ | ❌ |
-| No root required* | ✅ | ✅ | ❌ |
-| Real-time monitoring | ✅ | ❌ | ✅ |
-| Operation filtering | ✅ | ❌ | ✅ |
-| Easy setup | ✅ | ✅ | ❌ |
-| RTT/latency per op type | ✅ | ❌ | ✅ |
-| Memory safety | ✅ | ❌ | ❌ |
+| Per-operation latency | Yes | No | Yes |
+| No kernel modules needed | Yes | Yes | No |
+| No root required* | Yes | Yes | No |
+| Real-time monitoring | Yes | No | Yes |
+| Operation filtering | Yes | No | Yes |
+| Easy setup | Yes | Yes | No |
+| RTT/latency per op type | Yes | No | Yes |
+| Memory safety | Yes | No | No |
+| Prometheus metrics | Yes | No | No |
+| OpenTelemetry support | Yes | No | No |
 
 *Reading /proc/self/mountstats requires the process to have access to its own mount namespace
 
@@ -269,6 +272,57 @@ cargo build --release --target x86_64-unknown-linux-musl
 rustup target add aarch64-unknown-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu
 ```
+
+## Observability Integration
+
+nfs-gaze supports exporting metrics to modern observability platforms through optional feature flags:
+
+### Prometheus Integration
+
+```bash
+# Build with Prometheus support
+cargo build --features prometheus
+
+# Enable Prometheus metrics export
+./nfs-gaze --prometheus --prometheus-port 9090
+
+# Scrape metrics
+curl http://localhost:9090/metrics
+```
+
+### OpenTelemetry Integration
+
+```bash
+# Build with OpenTelemetry support
+cargo build --features opentelemetry
+
+# Export to OTEL collector
+./nfs-gaze --opentelemetry --otel-endpoint http://collector:4317
+```
+
+### Combined Observability
+
+```bash
+# Build with both integrations
+cargo build --features observability
+
+# Enable both Prometheus and OpenTelemetry
+./nfs-gaze --prometheus --opentelemetry \
+           --prometheus-port 9090 \
+           --otel-endpoint http://collector:4317
+```
+
+### Available Metrics
+
+- **NFS Operation Metrics**: Counters, latency histograms, error rates
+- **VFS Event Metrics**: Virtual File System level events
+- **Mount Point Metrics**: Per-mount statistics and health
+- **Rich Labels**: Mount point, server, operation type context
+
+For detailed setup instructions, see [OBSERVABILITY.md](OBSERVABILITY.md). Example configurations are available in the `examples/` directory:
+
+- `examples/prometheus.yml` - Prometheus scraping configuration
+- `examples/otel-collector.yml` - OpenTelemetry collector setup
 
 ## Testing
 

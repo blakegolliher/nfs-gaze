@@ -1,0 +1,52 @@
+# Example Prometheus configuration for scraping nfs-gaze metrics
+#
+# Usage:
+# 1. Start nfs-gaze with Prometheus enabled:
+#    cargo build --features prometheus --release
+#    ./target/release/nfs-gaze --prometheus --prometheus-port 9090
+#
+# 2. Start Prometheus with this config:
+#    prometheus --config.file=examples/prometheus.yml
+#
+# 3. Access Prometheus web UI at http://localhost:9090
+
+global:
+  scrape_interval: 15s       # Set the scrape interval to every 15 seconds
+  evaluation_interval: 15s   # Evaluate rules every 15 seconds
+
+# Scrape configuration for nfs-gaze
+scrape_configs:
+  - job_name: 'nfs-gaze'
+
+    # Override the global default and scrape targets from this job every 5 seconds
+    scrape_interval: 5s
+    scrape_timeout: 10s
+
+    # Metrics path defaults to '/metrics'
+    metrics_path: /metrics
+
+    # Scheme defaults to 'http'
+    scheme: http
+
+    static_configs:
+      # Single nfs-gaze instance
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'nfs-server-01'
+          environment: 'production'
+
+      # Multiple nfs-gaze instances (if monitoring multiple servers)
+      # - targets: ['nfs-server-02:9090', 'nfs-server-03:9090']
+      #   labels:
+      #     environment: 'production'
+
+# Example alerting rules (optional)
+rule_files:
+  # - "nfs_alerts.yml"
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093

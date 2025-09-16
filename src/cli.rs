@@ -52,6 +52,60 @@ pub struct Args {
     /// Path to mountstats file
     #[arg(short = 'f', long, default_value = "/proc/self/mountstats")]
     pub mountstats_path: String,
+
+    /// Enable Prometheus metrics export
+    #[cfg(feature = "prometheus")]
+    #[arg(long)]
+    pub prometheus: bool,
+
+    /// Prometheus metrics server port
+    #[cfg(feature = "prometheus")]
+    #[arg(long, default_value = "9090")]
+    pub prometheus_port: u16,
+
+    /// Enable OpenTelemetry metrics export
+    #[cfg(feature = "opentelemetry")]
+    #[arg(long)]
+    pub opentelemetry: bool,
+
+    /// OpenTelemetry collector endpoint
+    #[cfg(feature = "opentelemetry")]
+    #[arg(long)]
+    pub otel_endpoint: Option<String>,
+
+    /// Metrics export interval in seconds
+    #[arg(long, default_value = "10")]
+    pub metrics_interval: u64,
+}
+
+impl Args {
+    /// Convert CLI args to MetricsConfig
+    pub fn to_metrics_config(&self) -> crate::metrics::MetricsConfig {
+        crate::metrics::MetricsConfig {
+            #[cfg(feature = "prometheus")]
+            enable_prometheus: self.prometheus,
+            #[cfg(not(feature = "prometheus"))]
+            enable_prometheus: false,
+
+            #[cfg(feature = "prometheus")]
+            prometheus_port: self.prometheus_port,
+            #[cfg(not(feature = "prometheus"))]
+            prometheus_port: 9090,
+
+            #[cfg(feature = "opentelemetry")]
+            enable_opentelemetry: self.opentelemetry,
+            #[cfg(not(feature = "opentelemetry"))]
+            enable_opentelemetry: false,
+
+            #[cfg(feature = "opentelemetry")]
+            otel_endpoint: self.otel_endpoint.clone(),
+            #[cfg(not(feature = "opentelemetry"))]
+            otel_endpoint: None,
+
+            export_interval: std::time::Duration::from_secs(self.metrics_interval),
+            include_labels: true,
+        }
+    }
 }
 
 /// Parse operations filter string into a HashSet of operation names

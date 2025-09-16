@@ -1,0 +1,85 @@
+# Example OpenTelemetry Collector configuration for receiving nfs-gaze metrics
+#
+# Usage:
+# 1. Start the OTEL collector with this config:
+#    otelcol --config-file=examples/otel-collector.yml
+#
+# 2. Start nfs-gaze with OpenTelemetry enabled:
+#    cargo build --features opentelemetry --release
+#    ./target/release/nfs-gaze --opentelemetry --otel-endpoint http://localhost:4317
+#
+# 3. Metrics will be exported to your configured backend (Jaeger, Prometheus, etc.)
+
+receivers:
+  # OTLP receiver for metrics from nfs-gaze
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317   # nfs-gaze will send metrics here
+      http:
+        endpoint: 0.0.0.0:4318   # Alternative HTTP endpoint
+
+processors:
+  # Batch processor to reduce the number of requests
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    limit_mib: 256
+
+  # Resource processor to add additional attributes
+  resource:
+    attributes:
+      - key: service.name
+        value: "nfs-gaze"
+        action: upsert
+      - key: deployment.environment
+        value: "production"
+        action: upsert
+
+exporters:
+  # Export to Prometheus (metrics will be available at http://localhost:8889/metrics)
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: "nfs"
+
+  # Export to Jaeger (for distributed tracing - useful if extending nfs-gaze)
+  jaeger:
+    endpoint: jaeger-collector:14250
+    tls:
+      insecure: true
+
+  # Export to console for debugging
+  logging:
+    loglevel: info
+
+  # Example: Export to other backends
+  # otlp:
+  #   endpoint: https://api.honeycomb.io
+  #   headers:
+  #     "x-honeycomb-team": "your-api-key"
+  #
+  # otlphttp:
+  #   endpoint: https://ingest.datadog.com/api/v2/otlp/v1/metrics
+  #   headers:
+  #     "DD-API-KEY": "your-datadog-api-key"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [prometheus, logging]
+      # Add other exporters as needed: [jaeger, otlp, etc.]
+
+  extensions: []
+
+# Optional: Configure telemetry for the collector itself
+# telemetry:
+#   logs:
+#     level: "info"
+#   metrics:
+#     address: 0.0.0.0:8888

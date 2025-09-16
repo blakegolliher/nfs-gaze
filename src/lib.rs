@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod display;
+pub mod metrics;
 pub mod monitor;
 pub mod parser;
 pub mod stats;

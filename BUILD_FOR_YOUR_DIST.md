@@ -14,12 +14,12 @@ All major Linux distributions released after 2007 are supported:
 
 | Distribution | Minimum Version | Kernel Version | Support Status |
 |-------------|-----------------|----------------|----------------|
-| RHEL/CentOS | 5.x | 2.6.18 | ✅ Supported |
-| RHEL/Rocky/Alma | 6.x+ | 2.6.32+ | ✅ Supported |
-| Debian | 4.0 (Etch) | 2.6.18 | ✅ Supported |
-| Ubuntu | 6.10+ | 2.6.17+ | ✅ Supported |
-| SLES | 10 SP1+ | 2.6.16.46+ | ✅ Supported |
-| openSUSE | 10.2+ | 2.6.18+ | ✅ Supported |
+| RHEL/CentOS | 5.x | 2.6.18 | Supported |
+| RHEL/Rocky/Alma | 6.x+ | 2.6.32+ | Supported |
+| Debian | 4.0 (Etch) | 2.6.18 | Supported |
+| Ubuntu | 6.10+ | 2.6.17+ | Supported |
+| SLES | 10 SP1+ | 2.6.16.46+ | Supported |
+| openSUSE | 10.2+ | 2.6.18+ | Supported |
 
 ### Build Requirements
 
@@ -610,12 +610,12 @@ dpkg -l | grep nfs-gaze
 
 | Feature | Rust Version | Go Version | Notes |
 |---------|-------------|------------|-------|
-| Basic monitoring | ✅ | ✅ | Full compatibility |
-| Memory safety | ✅ | ❌ | Rust prevents leaks |
-| Performance | ✅ (Better) | ✅ | ~20-30% faster |
-| Binary size | ✅ (Smaller) | ✅ | Optimized builds |
-| Cross-compilation | ✅ | ✅ | Both support it |
-| CLI compatibility | ✅ | ✅ | 100% compatible |
+| Basic monitoring | Yes | Yes | Full compatibility |
+| Memory safety | Yes | No | Rust prevents leaks |
+| Performance | Yes (Better) | Yes | ~20-30% faster |
+| Binary size | Yes (Smaller) | Yes | Optimized builds |
+| Cross-compilation | Yes | Yes | Both support it |
+| CLI compatibility | Yes | Yes | 100% compatible |
 
 ## Contributing
 

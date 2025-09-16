@@ -81,6 +81,7 @@ impl Monitor {
     }
 
     /// Main monitoring loop
+    #[allow(clippy::too_many_arguments)]
     pub fn monitoring_loop<W: Write>(
         &self,
         writer: &mut W,
@@ -91,6 +92,7 @@ impl Monitor {
         count: usize,
         show_bandwidth: bool,
         clear_screen: bool,
+        metrics_manager: Option<&crate::metrics::MetricsManager>,
     ) -> Result<()> {
         let mut previous_mounts: HashMap<String, NFSMount> = monitor_mounts
             .iter()
@@ -168,6 +170,11 @@ impl Monitor {
                             show_bandwidth,
                             &timestamp,
                         )?;
+
+                        // Export metrics if enabled
+                        if let Some(manager) = metrics_manager {
+                            manager.export_metrics(current_mount, &delta_stats);
+                        }
                     }
                 }
 

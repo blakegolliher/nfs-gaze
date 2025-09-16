@@ -13,6 +13,7 @@ fn main() -> anyhow::Result<()> {
 fn run_linux() -> anyhow::Result<()> {
     use clap::Parser;
     use nfs_gaze::cli::{parse_operations_filter, Args};
+    use nfs_gaze::metrics::MetricsManager;
     use nfs_gaze::monitor::Monitor;
     use nfs_gaze::parser::parse_mountstats;
     use std::io::stdout;
@@ -22,6 +23,33 @@ fn run_linux() -> anyhow::Result<()> {
 
     // Parse operations filter
     let operations_filter = parse_operations_filter(args.operations);
+
+    // Initialize metrics manager if observability features are enabled
+    let metrics_config = args.to_metrics_config();
+    let metrics_manager = if metrics_config.enable_prometheus || metrics_config.enable_opentelemetry {
+        match MetricsManager::new(metrics_config) {
+            Ok(manager) => {
+                if manager.is_enabled() {
+                    println!("Metrics export enabled");
+                    #[cfg(feature = "prometheus")]
+                    if args.prometheus {
+                        println!("Prometheus metrics will be available on port {}", args.prometheus_port);
+                    }
+                    #[cfg(feature = "opentelemetry")]
+                    if args.opentelemetry {
+                        println!("OpenTelemetry metrics export enabled");
+                    }
+                }
+                Some(manager)
+            }
+            Err(e) => {
+                eprintln!("Failed to initialize metrics: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
 
     // Read initial mountstats to find available mounts
     let initial_mounts = match parse_mountstats(&args.mountstats_path) {
@@ -82,6 +110,7 @@ fn run_linux() -> anyhow::Result<()> {
         args.count,
         args.show_bandwidth,
         args.clear_screen,
+        metrics_manager.as_ref(),
     ) {
         eprintln!("Monitoring error: {}", e);
         std::process::exit(1);

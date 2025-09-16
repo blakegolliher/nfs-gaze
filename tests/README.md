@@ -76,17 +76,17 @@ Located in `tests/` directory:
 - **CLI module**: Argument parsing, validation
 
 ### Test Categories
-- ✅ **Unit tests** - Individual function testing
-- ✅ **Integration tests** - Module interaction testing
-- ✅ **Error handling** - Invalid input and edge case testing
-- ✅ **Performance** - Large data set handling
+- **Unit tests** - Individual function testing
+- **Integration tests** - Module interaction testing
+- **Error handling** - Invalid input and edge case testing
+- **Performance** - Large data set handling
 
 ## Coverage Goals (Achieved!)
 
-- ✅ **Overall coverage**: High coverage across all modules
-- ✅ **Critical Functions**: Complete coverage of parsing logic
-- ✅ **Error Handling**: All error paths tested
-- ✅ **Edge Cases**: Boundary conditions and invalid inputs
+- **Overall coverage**: High coverage across all modules
+- **Critical Functions**: Complete coverage of parsing logic
+- **Error Handling**: All error paths tested
+- **Edge Cases**: Boundary conditions and invalid inputs
 
 ## Continuous Integration
 
