@@ -216,10 +216,12 @@ fn test_display_stats_simple_empty_stats() {
 fn test_format_duration() {
     use nfs_gaze::display::format_duration;
 
-    assert_eq!(format_duration(500), "0.5ms");
-    assert_eq!(format_duration(1500), "1.5ms");
-    assert_eq!(format_duration(10000), "10.0ms");
-    assert_eq!(format_duration(0), "0.0ms");
+    assert_eq!(format_duration(0), "0.000μs");
+    assert_eq!(format_duration(500), "500.000μs");
+    assert_eq!(format_duration(999), "999.000μs");
+    assert_eq!(format_duration(1000), "1.000ms");
+    assert_eq!(format_duration(1500), "1.500ms");
+    assert_eq!(format_duration(10000), "10.000ms");
 }
 
 #[test]

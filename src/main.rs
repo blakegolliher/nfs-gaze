@@ -1,4 +1,5 @@
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
         eprintln!("This application only works on Linux");
@@ -6,11 +7,11 @@ fn main() -> anyhow::Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    run_linux()
+    run_linux().await
 }
 
 #[cfg(target_os = "linux")]
-fn run_linux() -> anyhow::Result<()> {
+async fn run_linux() -> anyhow::Result<()> {
     use clap::Parser;
     use nfs_gaze::cli::{parse_operations_filter, Args};
     use nfs_gaze::metrics::MetricsManager;
@@ -22,7 +23,7 @@ fn run_linux() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Parse operations filter
-    let operations_filter = parse_operations_filter(args.operations);
+    let operations_filter = parse_operations_filter(args.operations.clone());
 
     // Initialize metrics manager if observability features are enabled
     let metrics_config = args.to_metrics_config();
@@ -31,10 +32,14 @@ fn run_linux() -> anyhow::Result<()> {
             Ok(manager) => {
                 if manager.is_enabled() {
                     println!("Metrics export enabled");
+
+                    // Start Prometheus HTTP server if enabled
                     #[cfg(feature = "prometheus")]
                     if args.prometheus {
-                        println!("Prometheus metrics will be available on port {}", args.prometheus_port);
+                        manager.start_prometheus_server();
+                        println!("Prometheus metrics available at http://0.0.0.0:{}/metrics", args.prometheus_port);
                     }
+
                     #[cfg(feature = "opentelemetry")]
                     if args.opentelemetry {
                         println!("OpenTelemetry metrics export enabled");

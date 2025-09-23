@@ -576,6 +576,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-util"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c6995591a8f1380fcb4ba966a252a4b29188d51d2b89e3a252f5305be65aea8"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "http",
+ "http-body",
+ "hyper",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -718,7 +733,9 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
+ "http-body-util",
  "hyper",
+ "hyper-util",
  "opentelemetry",
  "opentelemetry-prometheus",
  "opentelemetry_sdk",

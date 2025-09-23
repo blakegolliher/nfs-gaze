@@ -137,10 +137,87 @@ impl PrometheusExporter {
         })
     }
 
-    pub fn start_server(&self, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // This would start an HTTP server for Prometheus to scrape
-        // Implementation would use hyper + tower to serve /metrics endpoint
-        todo!("Implement HTTP server for metrics endpoint")
+    pub async fn start_server(registry: Registry, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use hyper::server::conn::http1;
+        use hyper::service::service_fn;
+        use hyper::{Request, Response, Method, StatusCode};
+        use hyper::body::{Bytes, Incoming};
+        use http_body_util::Full;
+        use std::net::SocketAddr;
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+        use hyper_util::rt::TokioIo;
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        let listener = TcpListener::bind(addr).await?;
+        let registry = Arc::new(registry);
+
+        println!("Prometheus metrics server listening on http://0.0.0.0:{}/metrics", port);
+
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let io = TokioIo::new(stream);
+            let registry = Arc::clone(&registry);
+
+            tokio::spawn(async move {
+                let service = service_fn(move |req: Request<Incoming>| {
+                    let registry = Arc::clone(&registry);
+                    async move {
+                        let response = match (req.method(), req.uri().path()) {
+                            (&Method::GET, "/metrics") => {
+                                let encoder = TextEncoder::new();
+                                let metric_families = registry.gather();
+                                let mut buffer = Vec::new();
+
+                                match encoder.encode(&metric_families, &mut buffer) {
+                                    Ok(_) => {
+                                        Response::builder()
+                                            .status(StatusCode::OK)
+                                            .header("Content-Type", encoder.format_type())
+                                            .body(Full::new(Bytes::from(buffer)))
+                                            .unwrap()
+                                    }
+                                    Err(e) => {
+                                        let error_msg = format!("Failed to encode metrics: {}", e);
+                                        Response::builder()
+                                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                            .body(Full::new(Bytes::from(error_msg)))
+                                            .unwrap()
+                                    }
+                                }
+                            }
+                            (&Method::GET, "/") => {
+                                let body = "nfs-gaze metrics exporter\n\nAvailable endpoints:\n  /metrics - Prometheus metrics\n  /health  - Health check\n";
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .body(Full::new(Bytes::from(body)))
+                                    .unwrap()
+                            }
+                            (&Method::GET, "/health") => {
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .body(Full::new(Bytes::from("OK\n")))
+                                    .unwrap()
+                            }
+                            _ => {
+                                Response::builder()
+                                    .status(StatusCode::NOT_FOUND)
+                                    .body(Full::new(Bytes::from("Not Found\n")))
+                                    .unwrap()
+                            }
+                        };
+                        Ok::<_, hyper::Error>(response)
+                    }
+                });
+
+                if let Err(err) = http1::Builder::new()
+                    .serve_connection(io, service)
+                    .await
+                {
+                    eprintln!("Error serving connection: {:?}", err);
+                }
+            });
+        }
     }
 }
 
@@ -312,6 +389,8 @@ impl MetricsExporter for OpenTelemetryExporter {
 pub struct MetricsManager {
     exporters: Vec<Box<dyn MetricsExporter>>,
     config: MetricsConfig,
+    #[cfg(feature = "prometheus")]
+    prometheus_registry: Option<Registry>,
 }
 
 impl MetricsManager {
@@ -321,8 +400,13 @@ impl MetricsManager {
             let mut exporters: Vec<Box<dyn MetricsExporter>> = Vec::new();
 
             #[cfg(feature = "prometheus")]
+            let mut prometheus_registry = None;
+
+            #[cfg(feature = "prometheus")]
             if config.enable_prometheus {
-                exporters.push(Box::new(PrometheusExporter::new()?));
+                let exporter = PrometheusExporter::new()?;
+                prometheus_registry = Some(exporter.registry.clone());
+                exporters.push(Box::new(exporter));
             }
 
             #[cfg(feature = "opentelemetry")]
@@ -330,12 +414,36 @@ impl MetricsManager {
                 exporters.push(Box::new(OpenTelemetryExporter::new()?));
             }
 
-            Ok(Self { exporters, config })
+            Ok(Self {
+                exporters,
+                config,
+                #[cfg(feature = "prometheus")]
+                prometheus_registry,
+            })
         }
 
         #[cfg(not(any(feature = "prometheus", feature = "opentelemetry")))]
         {
-            Ok(Self { exporters: Vec::new(), config })
+            Ok(Self {
+                exporters: Vec::new(),
+                config,
+            })
+        }
+    }
+
+    #[cfg(feature = "prometheus")]
+    pub fn start_prometheus_server(&self) -> Option<tokio::task::JoinHandle<()>> {
+        if let Some(registry) = &self.prometheus_registry {
+            let registry = registry.clone();
+            let port = self.config.prometheus_port;
+
+            Some(tokio::spawn(async move {
+                if let Err(e) = PrometheusExporter::start_server(registry, port).await {
+                    eprintln!("Prometheus server error: {}", e);
+                }
+            }))
+        } else {
+            None
         }
     }
 

@@ -27,22 +27,22 @@ pub fn display_stats_simple<W: Write>(
     if show_bandwidth {
         writeln!(
             writer,
-            "{:<12} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-            "OP", "IOPS", "RTT(ms)", "EXE(ms)", "MB/s", "KB/op", "ERRORS"
+            "{:<12} {:>8} {:>10} {:>10} {:>8} {:>8} {:>8}",
+            "OP", "IOPS", "RTT", "EXE", "MB/s", "KB/op", "ERRORS"
         )?;
     } else {
         writeln!(
             writer,
-            "{:<12} {:>8} {:>8} {:>8} {:>8}",
-            "OP", "IOPS", "RTT(ms)", "EXE(ms)", "ERRORS"
+            "{:<12} {:>8} {:>10} {:>10} {:>8}",
+            "OP", "IOPS", "RTT", "EXE", "ERRORS"
         )?;
     }
 
     // Write separator line
     if show_bandwidth {
-        writeln!(writer, "{}", "-".repeat(72))?;
+        writeln!(writer, "{}", "-".repeat(76))?;
     } else {
-        writeln!(writer, "{}", "-".repeat(48))?;
+        writeln!(writer, "{}", "-".repeat(52))?;
     }
 
     // Write data rows
@@ -50,7 +50,7 @@ pub fn display_stats_simple<W: Write>(
         if show_bandwidth {
             writeln!(
                 writer,
-                "{:<12} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+                "{:<12} {:>8} {:>10} {:>10} {:>8} {:>8} {:>8}",
                 stat.operation,
                 format_rate(stat.iops),
                 format_duration(stat.avg_rtt as i64),
@@ -62,7 +62,7 @@ pub fn display_stats_simple<W: Write>(
         } else {
             writeln!(
                 writer,
-                "{:<12} {:>8} {:>8} {:>8} {:>8}",
+                "{:<12} {:>8} {:>10} {:>10} {:>8}",
                 stat.operation,
                 format_rate(stat.iops),
                 format_duration(stat.avg_rtt as i64),
@@ -76,12 +76,16 @@ pub fn display_stats_simple<W: Write>(
     Ok(())
 }
 
-/// Format duration in milliseconds with appropriate precision
-pub fn format_duration(ms: i64) -> String {
-    if ms == 0 {
-        "0.0ms".to_string()
+/// Format duration with automatic unit selection (microseconds or milliseconds)
+pub fn format_duration(us: i64) -> String {
+    if us == 0 {
+        "0.000μs".to_string()
+    } else if us < 1000 {
+        // Display in microseconds for values less than 1ms with 3 decimal places
+        format!("{:.3}μs", us as f64)
     } else {
-        format!("{:.1}ms", ms as f64 / 1000.0)
+        // Display in milliseconds for values >= 1ms with 3 decimal places
+        format!("{:.3}ms", us as f64 / 1000.0)
     }
 }
 
@@ -162,10 +166,12 @@ mod tests {
 
     #[test]
     fn test_format_duration() {
-        assert_eq!(format_duration(0), "0.0ms");
-        assert_eq!(format_duration(500), "0.5ms");
-        assert_eq!(format_duration(1500), "1.5ms");
-        assert_eq!(format_duration(10000), "10.0ms");
+        assert_eq!(format_duration(0), "0.000μs");
+        assert_eq!(format_duration(500), "500.000μs");
+        assert_eq!(format_duration(999), "999.000μs");
+        assert_eq!(format_duration(1000), "1.000ms");
+        assert_eq!(format_duration(1500), "1.500ms");
+        assert_eq!(format_duration(10000), "10.000ms");
     }
 
     #[test]
