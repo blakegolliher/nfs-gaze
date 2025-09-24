@@ -158,12 +158,12 @@ pub fn create_test_delta_stat(operation: &str, delta_ops: i64, delta_bytes: i64)
 /// Helper function to parse device string into server and export
 fn parse_device(device: &str) -> (String, String) {
     let parts: Vec<&str> = device.splitn(2, ':').collect();
-    let server = parts[0].to_string();
-    let export = if parts.len() > 1 {
-        parts[1].to_string()
-    } else {
-        "/".to_string()
-    };
+    let server = parts.get(0)
+        .unwrap_or(&"")
+        .to_string();
+    let export = parts.get(1)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "/".to_string());
     (server, export)
 }
 

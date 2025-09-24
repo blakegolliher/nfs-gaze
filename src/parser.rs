@@ -21,7 +21,8 @@ pub fn parse_events(parts: &[String]) -> Result<NFSEvents> {
     }
 
     let parse_int = |index: usize, field: &str| -> Result<i64> {
-        parts[index]
+        parts.get(index)
+            .ok_or_else(|| NfsGazeError::ParseError(format!("Missing field {} at index {}", field, index)))?
             .parse::<i64>()
             .map_err(|e| NfsGazeError::FieldParseError {
                 field: field.to_string(),
@@ -82,7 +83,8 @@ pub fn parse_nfs_operation(op_name: &str, stats: &[String]) -> Result<NFSOperati
     }
 
     let parse_int = |index: usize, field: &str| -> Result<i64> {
-        stats[index]
+        stats.get(index)
+            .ok_or_else(|| NfsGazeError::ParseError(format!("Missing field {}_{} at index {}", op_name, field, index)))?
             .parse::<i64>()
             .map_err(|e| NfsGazeError::FieldParseError {
                 field: format!("{}_{}", op_name, field),
@@ -153,8 +155,12 @@ impl MountstatsParser {
             )));
         }
 
-        let device_info: Vec<&str> = parts[0].split_whitespace().collect();
-        let mount_info: Vec<&str> = parts[1].split_whitespace().collect();
+        let device_info: Vec<&str> = parts.get(0)
+            .ok_or_else(|| NfsGazeError::ParseError("Missing device info".to_string()))?
+            .split_whitespace().collect();
+        let mount_info: Vec<&str> = parts.get(1)
+            .ok_or_else(|| NfsGazeError::ParseError("Missing mount info".to_string()))?
+            .split_whitespace().collect();
 
         if device_info.len() < 2 || mount_info.is_empty() {
             return Err(NfsGazeError::ParseError(format!(
@@ -163,16 +169,18 @@ impl MountstatsParser {
             )));
         }
 
-        let server_export = device_info[1];
-        let mount_point = mount_info[0];
+        let server_export = device_info.get(1)
+            .ok_or_else(|| NfsGazeError::ParseError("Missing server export in device info".to_string()))?;
+        let mount_point = mount_info.get(0)
+            .ok_or_else(|| NfsGazeError::ParseError("Missing mount point in mount info".to_string()))?;
 
         let server_parts: Vec<&str> = server_export.splitn(2, ':').collect();
-        let server = server_parts[0].to_string();
-        let export = if server_parts.len() > 1 {
-            server_parts[1].to_string()
-        } else {
-            "/".to_string()
-        };
+        let server = server_parts.get(0)
+            .ok_or_else(|| NfsGazeError::ParseError("Missing server in server export".to_string()))?
+            .to_string();
+        let export = server_parts.get(1)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "/".to_string());
 
         let mount = NFSMount {
             device: server_export.to_string(),
@@ -279,16 +287,24 @@ impl MountstatsParser {
                     source: e,
                 })?;
             // Handle different formats - try both index 5 and 6
-            mount.bytes_write = if parts.len() > 6 && parts[6] != "0" {
-                parts[6]
-                    .parse()
-                    .map_err(|e| NfsGazeError::FieldParseError {
-                        field: "bytes_write".to_string(),
-                        source: e,
-                    })?
-            } else if parts.len() > 5 {
-                parts[5]
-                    .parse()
+            mount.bytes_write = if let Some(val) = parts.get(6) {
+                if val != &"0" {
+                    val.parse()
+                        .map_err(|e| NfsGazeError::FieldParseError {
+                            field: "bytes_write".to_string(),
+                            source: e,
+                        })?
+                } else if let Some(val) = parts.get(5) {
+                    val.parse()
+                        .map_err(|e| NfsGazeError::FieldParseError {
+                            field: "bytes_write".to_string(),
+                            source: e,
+                        })?
+                } else {
+                    0
+                }
+            } else if let Some(val) = parts.get(5) {
+                val.parse()
                     .map_err(|e| NfsGazeError::FieldParseError {
                         field: "bytes_write".to_string(),
                         source: e,
@@ -315,8 +331,11 @@ impl MountstatsParser {
             )));
         }
 
-        let op_name = op_parts[0].trim();
-        let stats: Vec<String> = op_parts[1]
+        let op_name = op_parts.get(0)
+            .ok_or_else(|| NfsGazeError::ParseError("Missing operation name".to_string()))?
+            .trim();
+        let stats: Vec<String> = op_parts.get(1)
+            .ok_or_else(|| NfsGazeError::ParseError("Missing operation stats".to_string()))?
             .split_whitespace()
             .map(|s| s.to_string())
             .collect();
@@ -377,7 +396,9 @@ mod tests {
     #[test]
     fn test_parse_events_invalid_number() {
         let mut parts: Vec<String> = (1..=27).map(|i| i.to_string()).collect();
-        parts[0] = "invalid".to_string();
+        if !parts.is_empty() {
+            parts[0] = "invalid".to_string();
+        }
         let result = parse_events(&parts);
         assert!(result.is_err());
     }
