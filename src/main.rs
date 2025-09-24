@@ -2,8 +2,7 @@
 async fn main() -> anyhow::Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
-        eprintln!("This application only works on Linux");
-        std::process::exit(1);
+        return Err(anyhow::anyhow!("This application only works on Linux"));
     }
 
     #[cfg(target_os = "linux")]
@@ -28,64 +27,43 @@ async fn run_linux() -> anyhow::Result<()> {
     // Initialize metrics manager if observability features are enabled
     let metrics_config = args.to_metrics_config();
     let metrics_manager = if metrics_config.enable_prometheus || metrics_config.enable_opentelemetry {
-        match MetricsManager::new(metrics_config) {
-            Ok(manager) => {
-                if manager.is_enabled() {
-                    println!("Metrics export enabled");
+        let manager = MetricsManager::new(metrics_config)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize metrics: {}", e))?;
 
-                    // Start Prometheus HTTP server if enabled
-                    #[cfg(feature = "prometheus")]
-                    if args.prometheus {
-                        manager.start_prometheus_server();
-                        println!("Prometheus metrics available at http://0.0.0.0:{}/metrics", args.prometheus_port);
-                    }
+        if manager.is_enabled() {
+            println!("Metrics export enabled");
 
-                    #[cfg(feature = "opentelemetry")]
-                    if args.opentelemetry {
-                        println!("OpenTelemetry metrics export enabled");
-                    }
-                }
-                Some(manager)
+            // Start Prometheus HTTP server if enabled
+            #[cfg(feature = "prometheus")]
+            if args.prometheus {
+                manager.start_prometheus_server();
+                println!("Prometheus metrics available at http://0.0.0.0:{}/metrics", args.prometheus_port);
             }
-            Err(e) => {
-                eprintln!("Failed to initialize metrics: {}", e);
-                std::process::exit(1);
+
+            #[cfg(feature = "opentelemetry")]
+            if args.opentelemetry {
+                println!("OpenTelemetry metrics export enabled");
             }
         }
+        Some(manager)
     } else {
         None
     };
 
     // Read initial mountstats to find available mounts
-    let initial_mounts = match parse_mountstats(&args.mountstats_path) {
-        Ok(mounts) => mounts,
-        Err(e) => {
-            eprintln!(
-                "Error reading mountstats from {}: {}",
-                args.mountstats_path, e
-            );
-            std::process::exit(1);
-        }
-    };
+    let initial_mounts = parse_mountstats(&args.mountstats_path)
+        .map_err(|e| anyhow::anyhow!("Error reading mountstats from {}: {}", args.mountstats_path, e))?;
 
     if initial_mounts.is_empty() {
-        eprintln!("No NFS mounts found in {}", args.mountstats_path);
-        std::process::exit(1);
+        return Err(anyhow::anyhow!("No NFS mounts found in {}", args.mountstats_path));
     }
 
     // Determine which mounts to monitor
-    let monitor_mounts =
-        match Monitor::get_mounts_to_monitor(args.mount_point.clone(), &initial_mounts) {
-            Ok(mounts) => mounts,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        };
+    let monitor_mounts = Monitor::get_mounts_to_monitor(args.mount_point.clone(), &initial_mounts)
+        .map_err(|e| anyhow::anyhow!("Error: {}", e))?;
 
     if monitor_mounts.is_empty() {
-        eprintln!("No matching NFS mounts found to monitor");
-        std::process::exit(1);
+        return Err(anyhow::anyhow!("No matching NFS mounts found to monitor"));
     }
 
     // Create monitor and setup signal handling
@@ -106,7 +84,7 @@ async fn run_linux() -> anyhow::Result<()> {
     let interval = Duration::from_secs(args.interval);
 
     // Start monitoring loop
-    if let Err(e) = monitor.monitoring_loop(
+    monitor.monitoring_loop(
         &mut stdout,
         &args.mountstats_path,
         monitor_mounts,
@@ -116,10 +94,7 @@ async fn run_linux() -> anyhow::Result<()> {
         args.show_bandwidth,
         args.clear_screen,
         metrics_manager.as_ref(),
-    ) {
-        eprintln!("Monitoring error: {}", e);
-        std::process::exit(1);
-    }
+    ).map_err(|e| anyhow::anyhow!("Monitoring error: {}", e))?;
 
     println!("Monitoring stopped.");
     Ok(())

@@ -131,60 +131,25 @@ pub fn filter_operations(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{create_test_mount_with_operations, create_test_operation_with_stats};
     use std::collections::{HashMap, HashSet};
-
-    fn create_test_mount(operations: HashMap<String, NFSOperation>) -> NFSMount {
-        NFSMount {
-            device: "server:/export".to_string(),
-            mount_point: "/mnt/nfs".to_string(),
-            server: "server".to_string(),
-            export: "/export".to_string(),
-            age: 0,
-            operations,
-            events: None,
-            bytes_read: 0,
-            bytes_write: 0,
-        }
-    }
-
-    fn create_test_operation(
-        name: &str,
-        ops: i64,
-        bytes_sent: i64,
-        bytes_recv: i64,
-        rtt: i64,
-        exec: i64,
-    ) -> NFSOperation {
-        NFSOperation {
-            name: name.to_string(),
-            ops,
-            ntrans: ops,
-            timeouts: 0,
-            bytes_sent,
-            bytes_recv,
-            queue_time: 0,
-            rtt,
-            execute_time: exec,
-            errors: 0,
-        }
-    }
 
     #[test]
     fn test_calculate_delta_stats() {
         let mut prev_ops = HashMap::new();
         prev_ops.insert(
             "READ".to_string(),
-            create_test_operation("READ", 100, 1024, 2048, 1000, 2000),
+            create_test_operation_with_stats("READ", 100, 1024, 2048, 1000, 2000),
         );
 
         let mut curr_ops = HashMap::new();
         curr_ops.insert(
             "READ".to_string(),
-            create_test_operation("READ", 200, 2048, 4096, 2000, 4000),
+            create_test_operation_with_stats("READ", 200, 2048, 4096, 2000, 4000),
         );
 
-        let previous = create_test_mount(prev_ops);
-        let current = create_test_mount(curr_ops);
+        let previous = create_test_mount_with_operations(prev_ops);
+        let current = create_test_mount_with_operations(curr_ops);
 
         let deltas = calculate_delta_stats(&previous, &current, 1.0);
 
@@ -205,11 +170,11 @@ mod tests {
         let mut curr_ops = HashMap::new();
         curr_ops.insert(
             "READ".to_string(),
-            create_test_operation("READ", 100, 1024, 2048, 1000, 2000),
+            create_test_operation_with_stats("READ", 100, 1024, 2048, 1000, 2000),
         );
 
-        let previous = create_test_mount(prev_ops);
-        let current = create_test_mount(curr_ops);
+        let previous = create_test_mount_with_operations(prev_ops);
+        let current = create_test_mount_with_operations(curr_ops);
 
         let deltas = calculate_delta_stats(&previous, &current, 1.0);
 

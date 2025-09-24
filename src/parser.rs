@@ -3,9 +3,20 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 
+// Minimum number of fields required for parsing
+const MIN_EVENTS_FIELDS: usize = 25;
+const MIN_OPERATION_STATS: usize = 9;
+const MIN_BYTES_FIELDS: usize = 6;
+const MIN_AGE_FIELDS: usize = 2;
+
+// Optional field indices
+const PNFS_READ_INDEX: usize = 25;
+const PNFS_WRITE_INDEX: usize = 26;
+const OPERATION_ERRORS_INDEX: usize = 8;
+
 /// Parse the events line into an NFSEvents struct
 pub fn parse_events(parts: &[String]) -> Result<NFSEvents> {
-    if parts.len() < 25 {
+    if parts.len() < MIN_EVENTS_FIELDS {
         return Err(NfsGazeError::InvalidEventsParts(parts.len()));
     }
 
@@ -49,11 +60,11 @@ pub fn parse_events(parts: &[String]) -> Result<NFSEvents> {
     };
 
     // Optional pNFS fields
-    if parts.len() > 25 {
-        events.pnfs_read = parse_int(25, "PNFSRead")?;
+    if parts.len() > PNFS_READ_INDEX {
+        events.pnfs_read = parse_int(PNFS_READ_INDEX, "PNFSRead")?;
     }
-    if parts.len() > 26 {
-        events.pnfs_write = parse_int(26, "PNFSWrite")?;
+    if parts.len() > PNFS_WRITE_INDEX {
+        events.pnfs_write = parse_int(PNFS_WRITE_INDEX, "PNFSWrite")?;
     }
 
     Ok(events)
@@ -61,11 +72,12 @@ pub fn parse_events(parts: &[String]) -> Result<NFSEvents> {
 
 /// Parse NFS operation statistics from a stats line
 pub fn parse_nfs_operation(op_name: &str, stats: &[String]) -> Result<NFSOperation> {
-    if stats.len() < 9 {
+    if stats.len() < MIN_OPERATION_STATS {
         return Err(NfsGazeError::ParseError(format!(
-            "insufficient stats for operation {}: got {}, need 9",
+            "insufficient stats for operation {}: got {}, need {}",
             op_name,
-            stats.len()
+            stats.len(),
+            MIN_OPERATION_STATS
         )));
     }
 
@@ -92,8 +104,8 @@ pub fn parse_nfs_operation(op_name: &str, stats: &[String]) -> Result<NFSOperati
     };
 
     // Optional errors field
-    if stats.len() > 8 {
-        operation.errors = parse_int(8, "errors")?;
+    if stats.len() > OPERATION_ERRORS_INDEX {
+        operation.errors = parse_int(OPERATION_ERRORS_INDEX, "errors")?;
     }
 
     Ok(operation)
@@ -204,7 +216,7 @@ impl MountstatsParser {
 
     fn parse_age(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
+        if parts.len() < MIN_AGE_FIELDS {
             return Err(NfsGazeError::ParseError(format!(
                 "Invalid age line: {}",
                 line
@@ -229,7 +241,7 @@ impl MountstatsParser {
 
     fn parse_events_line(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
+        if parts.len() < MIN_AGE_FIELDS {
             return Err(NfsGazeError::ParseError(format!(
                 "Invalid events line: {}",
                 line
@@ -252,7 +264,7 @@ impl MountstatsParser {
 
     fn parse_bytes(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 6 {
+        if parts.len() < MIN_BYTES_FIELDS {
             return Err(NfsGazeError::ParseError(format!(
                 "Invalid bytes line: {}",
                 line

@@ -387,7 +387,9 @@ impl MetricsExporter for OpenTelemetryExporter {
 
 /// Combined metrics manager that can export to multiple backends
 pub struct MetricsManager {
+    #[cfg(any(feature = "prometheus", feature = "opentelemetry"))]
     exporters: Vec<Box<dyn MetricsExporter>>,
+    #[allow(dead_code)]
     config: MetricsConfig,
     #[cfg(feature = "prometheus")]
     prometheus_registry: Option<Registry>,
@@ -425,7 +427,6 @@ impl MetricsManager {
         #[cfg(not(any(feature = "prometheus", feature = "opentelemetry")))]
         {
             Ok(Self {
-                exporters: Vec::new(),
                 config,
             })
         }

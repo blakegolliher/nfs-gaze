@@ -6,6 +6,9 @@ pub mod parser;
 pub mod stats;
 pub mod types;
 
+#[cfg(test)]
+pub mod test_utils;
+
 pub use types::*;
 
 // Re-export commonly used functions for tests

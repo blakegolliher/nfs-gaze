@@ -4,7 +4,6 @@
 /// cargo run --example prometheus_demo --features prometheus -- --prometheus --prometheus-port 9090
 
 use nfs_gaze::{
-    cli::{Args, parse_operations_filter},
     metrics::{MetricsConfig, MetricsManager},
     types::{NFSMount, DeltaStats},
 };
@@ -29,7 +28,7 @@ fn main() {
                 println!("Metrics would be available at http://localhost:9090/metrics");
 
                 // Create sample data
-                let mut operations = HashMap::new();
+                let operations = HashMap::new();
                 let sample_stats = vec![
                     DeltaStats {
                         operation: "READ".to_string(),
