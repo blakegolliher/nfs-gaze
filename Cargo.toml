@@ -2,7 +2,7 @@
 name = "nfs-gaze"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Blake Golliher Sr <blakegolliher@gmail.com>"]
 description = "NFS I/O Statistics Monitor"
 license = "MIT OR Apache-2.0"
 
