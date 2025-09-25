@@ -22,13 +22,12 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 | Feature | nfs-gaze | nfsstat | nfsslower (bcc) |
 |---------|----------|---------|-----------------|
 | Per-operation latency | Yes | No | Yes |
-| No kernel modules needed | Yes | Yes | No |
-| No root required* | Yes | Yes | No |
+| Kernel modules needed | No | No | Yes |
+| Root Privs required* | No | No | Yes |
 | Real-time monitoring | Yes | No | Yes |
 | Operation filtering | Yes | No | Yes |
 | Easy setup | Yes | Yes | No |
 | RTT/latency per op type | Yes | No | Yes |
-| Memory safety | Yes | No | No |
 | Prometheus metrics | Yes | No | No |
 | OpenTelemetry support | Yes | No | No |
 
