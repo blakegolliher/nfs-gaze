@@ -2,8 +2,6 @@
 
 Real-time NFS performance monitoring with per-operation latency tracking. Monitor your NFS client I/O statistics on Linux systems with detailed, operation-specific metrics that go beyond traditional tools.
 
-**Now fully implemented in Rust** - complete migration from Go for improved performance, memory safety, and reliability!
-
 ## Key Features
 
 - **Per-Operation Latency Tracking**: Monitor RTT (Round Trip Time) for each NFS operation type (READ, WRITE, GETATTR, etc.)
@@ -350,39 +348,6 @@ cargo test test_parse_mountstats
 cargo install cargo-llvm-cov
 cargo llvm-cov --html
 ```
-
-## Migration from Go (Completed!)
-
-This project has been **completely migrated from Go to Rust**! The original ~2,051 lines of Go code have been replaced with a modern Rust implementation.
-
-### What Changed
-
-- **Complete rewrite** in Rust with improved architecture
-- **39 comprehensive tests** covering all functionality
-- **Enhanced error handling** using Result types
-- **Memory safety** without garbage collection
-- **Better performance** through zero-cost abstractions
-- **Modern async support** with tokio for signal handling
-- **Type safety** preventing entire classes of bugs
-
-### CLI Compatibility
-
-100% command-line compatibility is maintained:
-
-```bash
-# All these commands work exactly as before
-./nfs-gaze -m /mnt/nfs --bw
-./nfs-gaze --ops READ,WRITE -i 2 -c 10
-./nfs-gaze --clear -i 1
-```
-
-### Performance Improvements
-
-- **Memory Safety**: Zero memory leaks or buffer overflows
-- **Performance**: ~20-30% faster parsing and lower memory usage
-- **Reliability**: Robust error handling and graceful recovery
-- **Binary Size**: Smaller optimized binaries
-- **Thread Safety**: Built-in concurrency safety
 
 ## Troubleshooting
 
