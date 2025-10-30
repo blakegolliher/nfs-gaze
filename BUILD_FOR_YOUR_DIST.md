@@ -21,23 +21,19 @@ All major Linux distributions released after 2007 are supported:
 | SLES | 10 SP1+ | 2.6.16.46+ | Supported |
 | openSUSE | 10.2+ | 2.6.18+ | Supported |
 
-### Build Requirements
+## Building from Source
 
-**Rust Version (Recommended)**:
+### Prerequisites
+
+**Build Tools**:
 - Rust 1.70 or later
 - Cargo (included with Rust)
 - Git
 
-**Legacy Go Version**:
-- Go 1.21 or later (for building Go version)
-- GNU Make (optional, for automation)
-
-**Package Building**:
-- rpmbuild (for RPM packages)
-- dpkg-deb, debhelper (for DEB packages)
-- fakeroot (for DEB packages)
-
-## Building from Source (Rust - Recommended)
+**For RPM Building** (RHEL/CentOS/Rocky/Alma):
+- rpmbuild
+- rust
+- cargo
 
 ### Quick Build
 
@@ -71,153 +67,64 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 # Build for ARM64
 cargo build --release --target aarch64-unknown-linux-gnu
-
-# Build for multiple targets
-cargo build --release --target x86_64-unknown-linux-gnu
 ```
 
-### Advanced Build Options
+## Building RPM Package (RHEL/CentOS/Rocky/Alma Linux)
 
-```bash
-# Smallest possible binary (strip symbols)
-cargo build --release --target x86_64-unknown-linux-musl
-strip target/x86_64-unknown-linux-musl/release/nfs-gaze
-
-# Build with specific CPU optimizations
-RUSTFLAGS="-C target-cpu=native" cargo build --release
-
-# Build with link-time optimization (already enabled in Cargo.toml)
-cargo build --release
-```
-
-## Building from Source (Legacy Go Version)
-
-```bash
-# Clone the repository
-git clone https://github.com/blakegolliher/nfs-gaze.git
-cd nfs-gaze
-
-# Build the Go binary
-go build -o nfs-gaze-go .
-
-# Optimized Go build
-go build -ldflags="-s -w" -o nfs-gaze-go
-
-# Cross-compile Go version
-GOOS=linux GOARCH=amd64 go build -o nfs-gaze-go-amd64
-GOOS=linux GOARCH=arm64 go build -o nfs-gaze-go-arm64
-```
-
-## Building RPM Package (Red Hat/Fedora/CentOS/RHEL)
-
-### 1. Prepare the Build Environment
+### Prerequisites
 
 ```bash
 # Install required packages
-sudo yum install -y rpm-build rust cargo make git
-
-# For older systems, install Rust manually
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Create RPM build tree
-mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+sudo yum install -y rpm-build rust cargo git
 ```
 
-### 2. Create the SPEC File
+### Automated Build
 
-Create `~/rpmbuild/SPECS/nfs-gaze.spec`:
-
-```spec
-Name:           nfs-gaze
-Version:        2.0.0
-Release:        1%{?dist}
-Summary:        Real-time NFS performance monitoring tool
-
-License:        MIT
-URL:            https://github.com/blakegolliher/nfs-gaze
-Source0:        %{name}-%{version}.tar.gz
-
-BuildRequires:  rust >= 1.70
-BuildRequires:  cargo
-BuildRequires:  git
-Requires:       kernel >= 2.6.17
-
-%description
-nfs-gaze is a real-time NFS I/O performance monitoring tool that provides
-detailed statistics about NFS operations with per-operation latency tracking.
-Built with Rust for memory safety and performance. It reads from
-/proc/self/mountstats to display IOPS, bandwidth, latency, and other metrics
-for comprehensive NFS performance analysis.
-
-%prep
-%setup -q
-
-%build
-# Build optimized release binary
-cargo build --release --target x86_64-unknown-linux-gnu
-
-%install
-rm -rf $RPM_BUILD_ROOT
-mkdir -p $RPM_BUILD_ROOT%{_bindir}
-mkdir -p $RPM_BUILD_ROOT%{_mandir}/man1
-install -m 755 target/x86_64-unknown-linux-gnu/release/%{name} $RPM_BUILD_ROOT%{_bindir}/%{name}
-
-%clean
-rm -rf $RPM_BUILD_ROOT
-
-%files
-%defattr(-,root,root,-)
-%doc README.md BUILD_FOR_YOUR_DIST.md
-%license LICENSE
-%{_bindir}/%{name}
-
-%changelog
-* Mon Jan 15 2025 Your Name <your.email@example.com> - 2.0.0-1
-- Major rewrite in Rust for improved performance and safety
-- 100% CLI compatibility with Go version
-- Memory safety and zero memory leaks
-- ~20-30% faster parsing performance
-
-* Thu Jan 15 2025 Your Name <your.email@example.com> - 1.0.0-1
-- Initial RPM release (Go version)
-- Real-time NFS performance monitoring
-- Support for multiple output formats
-```
-
-### 3. Create Source Tarball
+The project includes automated RPM building via the Makefile:
 
 ```bash
-# From your project directory
-VERSION=2.0.0
-cd ..
-tar czf ~/rpmbuild/SOURCES/nfs-gaze-${VERSION}.tar.gz \
-    --transform "s/^nfs-gaze/nfs-gaze-${VERSION}/" \
-    nfs-gaze/
+# Build the RPM package
+make rpm
 ```
 
-### 4. Build the RPM
+This will:
+1. Set up the RPM build environment (`~/rpmbuild/`)
+2. Create a source tarball
+3. Build the RPM with a unique timestamp-based build number
+4. Output the RPM locations
+
+**Output**:
+- Binary RPM: `~/rpmbuild/RPMS/x86_64/nfs-gaze-0.1.0-1.YYYYMMDDHHMMSS.el9.x86_64.rpm`
+- Source RPM: `~/rpmbuild/SRPMS/nfs-gaze-0.1.0-1.YYYYMMDDHHMMSS.el9.src.rpm`
+
+### Custom Build Number
+
+You can override the automatic timestamp with a custom build number:
 
 ```bash
-# Build the RPM
-cd ~/rpmbuild
-rpmbuild -ba SPECS/nfs-gaze.spec
-
-# The built RPM will be in:
-# ~/rpmbuild/RPMS/x86_64/nfs-gaze-2.0.0-1.el8.x86_64.rpm
+make rpm BUILD_NUMBER=mybuild001
 ```
 
-### 5. Install the RPM
+### Installing the RPM
 
 ```bash
-sudo rpm -ivh ~/rpmbuild/RPMS/x86_64/nfs-gaze-2.0.0-1.*.rpm
+# Install using rpm
+sudo rpm -ivh ~/rpmbuild/RPMS/x86_64/nfs-gaze-0.1.0-*.rpm
 
 # Or using yum/dnf
-sudo yum localinstall ~/rpmbuild/RPMS/x86_64/nfs-gaze-2.0.0-1.*.rpm
+sudo yum localinstall ~/rpmbuild/RPMS/x86_64/nfs-gaze-0.1.0-*.rpm
+```
+
+### Cleaning Build Artifacts
+
+```bash
+# Clean all RPM build artifacts
+make rpm-clean
 ```
 
 ## Building DEB Package (Debian/Ubuntu)
 
-### 1. Prepare the Build Environment
+### Prerequisites
 
 ```bash
 # Install required packages
@@ -229,18 +136,20 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 ```
 
-### 2. Create Package Directory Structure
+### Manual DEB Build
+
+#### 1. Create Package Directory Structure
 
 ```bash
 # Create the package directory
-mkdir -p nfs-gaze-2.0.0/debian
-cd nfs-gaze-2.0.0
+mkdir -p nfs-gaze-0.1.0/debian
+cd nfs-gaze-0.1.0
 
 # Copy source files
 cp -r /path/to/nfs-gaze/* .
 ```
 
-### 3. Create Debian Control Files
+#### 2. Create Debian Control Files
 
 Create `debian/control`:
 
@@ -248,7 +157,7 @@ Create `debian/control`:
 Source: nfs-gaze
 Section: admin
 Priority: optional
-Maintainer: Your Name <your.email@example.com>
+Maintainer: Blake Golliher Sr <blakegolliher@gmail.com>
 Build-Depends: debhelper (>= 9), cargo (>= 1.70), rustc (>= 1.70), git
 Standards-Version: 4.5.0
 Homepage: https://github.com/blakegolliher/nfs-gaze
@@ -276,23 +185,15 @@ Description: Real-time NFS performance monitoring tool
 Create `debian/changelog`:
 
 ```changelog
-nfs-gaze (2.0.0-1) stable; urgency=medium
+nfs-gaze (0.1.0-1) stable; urgency=medium
 
-  * Major rewrite in Rust for improved performance and safety
-  * 100% CLI compatibility with Go version
-  * Memory safety and zero memory leaks
-  * ~20-30% faster parsing performance
-  * Better error handling and recovery
-
- -- Your Name <your.email@example.com>  Mon, 15 Jan 2025 12:00:00 +0000
-
-nfs-gaze (1.0.0-1) stable; urgency=low
-
-  * Initial Debian package release (Go version)
+  * Initial Debian package release
   * Real-time NFS performance monitoring
+  * Built with Rust for memory safety and performance
+  * Per-operation latency tracking
   * Support for multiple output formats
 
- -- Your Name <your.email@example.com>  Thu, 15 Jan 2025 12:00:00 +0000
+ -- Blake Golliher Sr <blakegolliher@gmail.com>  Wed, 29 Oct 2025 12:00:00 +0000
 ```
 
 Create `debian/compat`:
@@ -310,10 +211,10 @@ Create `debian/rules`:
 	dh $@
 
 override_dh_auto_build:
-	cargo build --release --target x86_64-unknown-linux-gnu
+	cargo build --release
 
 override_dh_auto_install:
-	install -D -m 755 target/x86_64-unknown-linux-gnu/release/nfs-gaze debian/nfs-gaze/usr/bin/nfs-gaze
+	install -D -m 755 target/release/nfs-gaze debian/nfs-gaze/usr/bin/nfs-gaze
 	install -D -m 644 README.md debian/nfs-gaze/usr/share/doc/nfs-gaze/README.md
 	install -D -m 644 BUILD_FOR_YOUR_DIST.md debian/nfs-gaze/usr/share/doc/nfs-gaze/BUILD_FOR_YOUR_DIST.md
 
@@ -338,8 +239,8 @@ Upstream-Name: nfs-gaze
 Source: https://github.com/blakegolliher/nfs-gaze
 
 Files: *
-Copyright: 2025 Your Name <your.email@example.com>
-License: MIT
+Copyright: 2025 Blake Golliher Sr <blakegolliher@gmail.com>
+License: MIT OR Apache-2.0
  Permission is hereby granted, free of charge, to any person obtaining a
  copy of this software and associated documentation files (the "Software"),
  to deal in the Software without restriction, including without limitation
@@ -359,7 +260,7 @@ License: MIT
  DEALINGS IN THE SOFTWARE.
 ```
 
-### 4. Build the DEB Package
+#### 3. Build the DEB Package
 
 ```bash
 # Build the package
@@ -369,178 +270,43 @@ dpkg-buildpackage -us -uc -b
 debuild -us -uc -b
 
 # The built package will be in the parent directory:
-# ../nfs-gaze_2.0.0-1_amd64.deb
+# ../nfs-gaze_0.1.0-1_amd64.deb
 ```
 
-### 5. Install the DEB Package
+#### 4. Install the DEB Package
 
 ```bash
 # Install using dpkg
-sudo dpkg -i ../nfs-gaze_2.0.0-1_amd64.deb
+sudo dpkg -i ../nfs-gaze_0.1.0-1_amd64.deb
 
 # Or using apt
-sudo apt install ../nfs-gaze_2.0.0-1_amd64.deb
+sudo apt install ../nfs-gaze_0.1.0-1_amd64.deb
 
 # Fix any dependency issues
 sudo apt-get install -f
 ```
 
-## Creating a Makefile for Automation
+## Makefile Targets
 
-Create a `Makefile` in your project root:
-
-```makefile
-NAME := nfs-gaze
-VERSION := 2.0.0
-RUST_TARGET := x86_64-unknown-linux-gnu
-
-.PHONY: all build clean test install uninstall fmt clippy
-
-all: build
-
-# Build targets
-build:
-	cargo build --release
-
-build-musl:
-	cargo build --release --target x86_64-unknown-linux-musl
-
-build-arm64:
-	cargo build --release --target aarch64-unknown-linux-gnu
-
-# Development
-test:
-	cargo test
-
-fmt:
-	cargo fmt
-
-clippy:
-	cargo clippy -- -D warnings
-
-clean:
-	cargo clean
-	rm -rf dist/
-	rm -f *.rpm *.deb
-
-# Installation
-install: build
-	install -D -m 755 target/release/$(NAME) $(DESTDIR)/usr/bin/$(NAME)
-
-uninstall:
-	rm -f $(DESTDIR)/usr/bin/$(NAME)
-
-# Distribution packages
-dist: dist-rpm dist-deb
-
-dist-rpm:
-	mkdir -p dist/rpm
-	# RPM building would go here
-	@echo "RPM package would be built in dist/rpm/"
-
-dist-deb:
-	mkdir -p dist/deb
-	# DEB building would go here
-	@echo "DEB package would be built in dist/deb/"
-
-# Development helpers
-dev-deps:
-	rustup component add clippy rustfmt
-	cargo install cargo-llvm-cov
-
-coverage:
-	cargo llvm-cov --html --output-dir coverage
-	@echo "Coverage report generated in coverage/index.html"
-
-# Legacy Go build (for compatibility)
-build-go:
-	go build -ldflags="-s -w" -o $(NAME)-go
-
-# Help
-help:
-	@echo "Available targets:"
-	@echo "  build        - Build debug version"
-	@echo "  build-musl   - Build static binary"
-	@echo "  build-arm64  - Build for ARM64"
-	@echo "  test         - Run tests"
-	@echo "  fmt          - Format code"
-	@echo "  clippy       - Run linter"
-	@echo "  install      - Install to system"
-	@echo "  clean        - Clean build artifacts"
-	@echo "  coverage     - Generate coverage report"
-```
-
-## Container/Kubernetes Deployment
-
-### Dockerfile
-
-```dockerfile
-# Multi-stage build for Rust
-FROM rust:1.75-alpine AS builder
-
-# Install build dependencies
-RUN apk add --no-cache musl-dev
-
-WORKDIR /app
-COPY . .
-
-# Build static binary
-RUN cargo build --release --target x86_64-unknown-linux-musl
-
-# Runtime image
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-
-# Copy binary from builder
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/nfs-gaze /usr/local/bin/
-
-ENTRYPOINT ["nfs-gaze"]
-```
-
-### Usage with Docker
+The project includes several useful make targets:
 
 ```bash
-# Build container
-docker build -t nfs-gaze .
-
-# Run with host /proc access
-docker run -v /proc:/host/proc:ro nfs-gaze -f /host/proc/self/mountstats
-
-# For Kubernetes, mount host /proc in pod spec
+make build        # Build the release binary
+make test         # Run tests
+make coverage     # Generate test coverage report
+make clean        # Remove built files and RPM artifacts
+make install      # Install binary to system
+make uninstall    # Remove installed binary
+make rpm          # Build RPM package (CentOS/RHEL/Rocky)
+make rpm-clean    # Clean RPM build artifacts
+make fmt          # Format code
+make lint         # Run clippy linter
+make dev          # Format, test, and generate coverage
+make watch        # Watch for changes and run tests
+make help         # Show help message
 ```
 
-## Performance Comparisons
-
-### Binary Size Comparison
-
-| Version | Static Binary Size | Dynamic Binary Size |
-|---------|-------------------|-------------------|
-| Rust (release) | ~8MB | ~4MB |
-| Go (optimized) | ~12MB | ~8MB |
-
-### Runtime Performance
-
-| Metric | Rust Version | Go Version | Improvement |
-|--------|-------------|------------|-------------|
-| Parse speed | ~20μs | ~28μs | +40% |
-| Memory usage | ~2MB | ~3MB | -33% |
-| Startup time | ~5ms | ~15ms | +300% |
-
-## Distribution-Specific Notes
-
-### Red Hat-based Systems (RHEL, CentOS, Fedora, Rocky, Alma)
-
-1. **SELinux**: No special policies needed - reads only from `/proc/self/mountstats`
-2. **Rust Installation**: Use `dnf install rust cargo` on newer systems
-3. **Static Linking**: Recommended for better compatibility across versions
-
-### Debian-based Systems (Debian, Ubuntu, Mint)
-
-1. **Rust Installation**: Use `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-2. **Build Dependencies**: Ensure `build-essential` is installed
-3. **Package Signing**: Consider setting up package signing for security
-
-### Verification
+## Verification
 
 After installation, verify the package:
 
@@ -548,9 +314,7 @@ After installation, verify the package:
 # Check installation
 which nfs-gaze
 nfs-gaze --help
-
-# Verify it's the Rust version
-nfs-gaze --version  # Should show Rust build info
+nfs-gaze --version
 
 # Test with actual NFS mounts (requires Linux)
 nfs-gaze
@@ -558,10 +322,26 @@ nfs-gaze
 # Package verification
 # For RPM-based systems
 rpm -qi nfs-gaze
+rpm -ql nfs-gaze
 
 # For DEB-based systems
 dpkg -l | grep nfs-gaze
+dpkg -L nfs-gaze
 ```
+
+## Distribution-Specific Notes
+
+### Red Hat-based Systems (RHEL, CentOS, Fedora, Rocky, Alma)
+
+1. **SELinux**: No special policies needed - reads only from `/proc/self/mountstats`
+2. **Rust Installation**: Use `dnf install rust cargo` on newer systems, or `yum install rust cargo` on older versions
+3. **Static Linking**: Recommended for better compatibility across versions
+
+### Debian-based Systems (Debian, Ubuntu, Mint)
+
+1. **Rust Installation**: Use official rustup installer: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+2. **Build Dependencies**: Ensure `build-essential` is installed
+3. **Package Signing**: Consider setting up package signing for security
 
 ## Troubleshooting
 
@@ -606,17 +386,6 @@ dpkg -l | grep nfs-gaze
    cat /proc/self/mountstats | head
    ```
 
-## Support Matrix
-
-| Feature | Rust Version | Go Version | Notes |
-|---------|-------------|------------|-------|
-| Basic monitoring | Yes | Yes | Full compatibility |
-| Memory safety | Yes | No | Rust prevents leaks |
-| Performance | Yes (Better) | Yes | ~20-30% faster |
-| Binary size | Yes (Smaller) | Yes | Optimized builds |
-| Cross-compilation | Yes | Yes | Both support it |
-| CLI compatibility | Yes | Yes | 100% compatible |
-
 ## Contributing
 
 When creating packages for new distributions:
@@ -630,4 +399,4 @@ When creating packages for new distributions:
 
 ## License
 
-nfs-gaze is distributed under the MIT License. See LICENSE file for details.
+nfs-gaze is distributed under the MIT OR Apache-2.0 License. See LICENSE file for details.
