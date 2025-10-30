@@ -2,7 +2,10 @@ use crate::types::{DeltaStats, NFSMount, NFSEvents};
 use std::time::Duration;
 
 #[cfg(feature = "prometheus")]
-use prometheus::{Counter, Gauge, Histogram, Registry, Encoder, TextEncoder};
+use prometheus::{
+    CounterVec, GaugeVec, HistogramVec,
+    Registry, Encoder, TextEncoder, Opts, HistogramOpts
+};
 
 #[cfg(feature = "opentelemetry")]
 use opentelemetry::{metrics::*, Context, KeyValue};
@@ -43,20 +46,28 @@ impl Default for MetricsConfig {
 #[cfg(feature = "prometheus")]
 pub struct PrometheusExporter {
     registry: Registry,
-    // NFS Operation metrics
-    nfs_operations_total: Counter,
-    nfs_operation_duration_seconds: Histogram,
-    nfs_operation_bytes_total: Counter,
-    nfs_operation_errors_total: Counter,
-    nfs_operation_timeouts_total: Counter,
+    // NFS Operation metrics with labels
+    nfs_operations_total: CounterVec,
+    nfs_operation_duration_seconds: HistogramVec,
+    nfs_operation_bytes_total: CounterVec,
+    nfs_operation_errors_total: CounterVec,
+    nfs_operation_timeouts_total: CounterVec,
 
-    // VFS Event metrics
-    nfs_vfs_events_total: Counter,
+    // VFS Event metrics - separate counters for each event type
+    nfs_vfs_open_total: CounterVec,
+    nfs_vfs_lookup_total: CounterVec,
+    nfs_vfs_access_total: CounterVec,
+    nfs_vfs_read_page_total: CounterVec,
+    nfs_vfs_write_page_total: CounterVec,
+    nfs_vfs_getdents_total: CounterVec,
+    nfs_vfs_setattr_total: CounterVec,
+    nfs_vfs_flush_total: CounterVec,
+    nfs_vfs_fsync_total: CounterVec,
 
-    // Mount metrics
-    nfs_mount_age_seconds: Gauge,
-    nfs_mount_bytes_read_total: Counter,
-    nfs_mount_bytes_written_total: Counter,
+    // Mount metrics with labels
+    nfs_mount_age_seconds: GaugeVec,
+    nfs_mount_bytes_read_total: CounterVec,
+    nfs_mount_bytes_written_total: CounterVec,
 }
 
 #[cfg(feature = "prometheus")]
@@ -64,52 +75,99 @@ impl PrometheusExporter {
     pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let registry = Registry::new();
 
-        // Create metrics
-        let nfs_operations_total = Counter::new(
-            "nfs_operations_total",
-            "Total number of NFS operations performed"
+        // Define label names for metrics
+        let operation_labels = &["mount_point", "server", "operation"];
+        let mount_labels = &["mount_point", "server"];
+
+        // Create NFS operation metrics with labels
+        let nfs_operations_total = CounterVec::new(
+            Opts::new("nfs_operations_total", "Total number of NFS operations performed"),
+            operation_labels
         )?;
 
-        let nfs_operation_duration_seconds = Histogram::with_opts(
-            prometheus::HistogramOpts::new(
+        let nfs_operation_duration_seconds = HistogramVec::new(
+            HistogramOpts::new(
                 "nfs_operation_duration_seconds",
                 "Duration of NFS operations in seconds"
-            ).buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
+            ).buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
+            operation_labels
         )?;
 
-        let nfs_operation_bytes_total = Counter::new(
-            "nfs_operation_bytes_total",
-            "Total bytes transferred in NFS operations"
+        let nfs_operation_bytes_total = CounterVec::new(
+            Opts::new("nfs_operation_bytes_total", "Total bytes transferred in NFS operations"),
+            operation_labels
         )?;
 
-        let nfs_operation_errors_total = Counter::new(
-            "nfs_operation_errors_total",
-            "Total number of NFS operation errors"
+        let nfs_operation_errors_total = CounterVec::new(
+            Opts::new("nfs_operation_errors_total", "Total number of NFS operation errors"),
+            operation_labels
         )?;
 
-        let nfs_operation_timeouts_total = Counter::new(
-            "nfs_operation_timeouts_total",
-            "Total number of NFS operation timeouts"
+        let nfs_operation_timeouts_total = CounterVec::new(
+            Opts::new("nfs_operation_timeouts_total", "Total number of NFS operation timeouts"),
+            operation_labels
         )?;
 
-        let nfs_vfs_events_total = Counter::new(
-            "nfs_vfs_events_total",
-            "Total number of NFS VFS events"
+        // Create separate VFS event metrics with labels
+        let nfs_vfs_open_total = CounterVec::new(
+            Opts::new("nfs_vfs_open_total", "Total number of VFS open events"),
+            mount_labels
         )?;
 
-        let nfs_mount_age_seconds = Gauge::new(
-            "nfs_mount_age_seconds",
-            "Age of NFS mount in seconds"
+        let nfs_vfs_lookup_total = CounterVec::new(
+            Opts::new("nfs_vfs_lookup_total", "Total number of VFS lookup events"),
+            mount_labels
         )?;
 
-        let nfs_mount_bytes_read_total = Counter::new(
-            "nfs_mount_bytes_read_total",
-            "Total bytes read from NFS mount"
+        let nfs_vfs_access_total = CounterVec::new(
+            Opts::new("nfs_vfs_access_total", "Total number of VFS access events"),
+            mount_labels
         )?;
 
-        let nfs_mount_bytes_written_total = Counter::new(
-            "nfs_mount_bytes_written_total",
-            "Total bytes written to NFS mount"
+        let nfs_vfs_read_page_total = CounterVec::new(
+            Opts::new("nfs_vfs_read_page_total", "Total number of VFS read page events"),
+            mount_labels
+        )?;
+
+        let nfs_vfs_write_page_total = CounterVec::new(
+            Opts::new("nfs_vfs_write_page_total", "Total number of VFS write page events"),
+            mount_labels
+        )?;
+
+        let nfs_vfs_getdents_total = CounterVec::new(
+            Opts::new("nfs_vfs_getdents_total", "Total number of VFS getdents events"),
+            mount_labels
+        )?;
+
+        let nfs_vfs_setattr_total = CounterVec::new(
+            Opts::new("nfs_vfs_setattr_total", "Total number of VFS setattr events"),
+            mount_labels
+        )?;
+
+        let nfs_vfs_flush_total = CounterVec::new(
+            Opts::new("nfs_vfs_flush_total", "Total number of VFS flush events"),
+            mount_labels
+        )?;
+
+        let nfs_vfs_fsync_total = CounterVec::new(
+            Opts::new("nfs_vfs_fsync_total", "Total number of VFS fsync events"),
+            mount_labels
+        )?;
+
+        // Create mount metrics with labels
+        let nfs_mount_age_seconds = GaugeVec::new(
+            Opts::new("nfs_mount_age_seconds", "Age of NFS mount in seconds"),
+            mount_labels
+        )?;
+
+        let nfs_mount_bytes_read_total = CounterVec::new(
+            Opts::new("nfs_mount_bytes_read_total", "Total bytes read from NFS mount"),
+            mount_labels
+        )?;
+
+        let nfs_mount_bytes_written_total = CounterVec::new(
+            Opts::new("nfs_mount_bytes_written_total", "Total bytes written to NFS mount"),
+            mount_labels
         )?;
 
         // Register metrics
@@ -118,7 +176,19 @@ impl PrometheusExporter {
         registry.register(Box::new(nfs_operation_bytes_total.clone()))?;
         registry.register(Box::new(nfs_operation_errors_total.clone()))?;
         registry.register(Box::new(nfs_operation_timeouts_total.clone()))?;
-        registry.register(Box::new(nfs_vfs_events_total.clone()))?;
+
+        // Register VFS event metrics
+        registry.register(Box::new(nfs_vfs_open_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_lookup_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_access_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_read_page_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_write_page_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_getdents_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_setattr_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_flush_total.clone()))?;
+        registry.register(Box::new(nfs_vfs_fsync_total.clone()))?;
+
+        // Register mount metrics
         registry.register(Box::new(nfs_mount_age_seconds.clone()))?;
         registry.register(Box::new(nfs_mount_bytes_read_total.clone()))?;
         registry.register(Box::new(nfs_mount_bytes_written_total.clone()))?;
@@ -130,7 +200,15 @@ impl PrometheusExporter {
             nfs_operation_bytes_total,
             nfs_operation_errors_total,
             nfs_operation_timeouts_total,
-            nfs_vfs_events_total,
+            nfs_vfs_open_total,
+            nfs_vfs_lookup_total,
+            nfs_vfs_access_total,
+            nfs_vfs_read_page_total,
+            nfs_vfs_write_page_total,
+            nfs_vfs_getdents_total,
+            nfs_vfs_setattr_total,
+            nfs_vfs_flush_total,
+            nfs_vfs_fsync_total,
             nfs_mount_age_seconds,
             nfs_mount_bytes_read_total,
             nfs_mount_bytes_written_total,
@@ -225,42 +303,84 @@ impl PrometheusExporter {
 impl MetricsExporter for PrometheusExporter {
     fn export_nfs_operation_metrics(&self, mount: &NFSMount, stats: &[DeltaStats]) {
         for stat in stats {
+            // Create labels for the current operation
+            let labels = &[
+                mount.mount_point.as_str(),
+                mount.server.as_str(),
+                stat.operation.as_str()
+            ];
+
             // Add operation count
-            self.nfs_operations_total.inc_by(stat.delta_ops as f64);
+            self.nfs_operations_total.with_label_values(labels).inc_by(stat.delta_ops as f64);
 
             // Add duration histogram (convert ms to seconds)
             if stat.avg_rtt > 0.0 {
-                self.nfs_operation_duration_seconds.observe(stat.avg_rtt / 1000.0);
+                self.nfs_operation_duration_seconds.with_label_values(labels).observe(stat.avg_rtt / 1000.0);
             }
 
             // Add bytes transferred
-            self.nfs_operation_bytes_total.inc_by(stat.delta_bytes as f64);
+            self.nfs_operation_bytes_total.with_label_values(labels).inc_by(stat.delta_bytes as f64);
 
             // Add errors
             if stat.delta_errors > 0 {
-                self.nfs_operation_errors_total.inc_by(stat.delta_errors as f64);
+                self.nfs_operation_errors_total.with_label_values(labels).inc_by(stat.delta_errors as f64);
             }
 
             // Add timeouts
             if stat.delta_retrans > 0 {
-                self.nfs_operation_timeouts_total.inc_by(stat.delta_retrans as f64);
+                self.nfs_operation_timeouts_total.with_label_values(labels).inc_by(stat.delta_retrans as f64);
             }
         }
     }
 
     fn export_nfs_events_metrics(&self, mount: &NFSMount, events: &NFSEvents) {
-        // Export VFS events as incremental counters
-        self.nfs_vfs_events_total.inc_by(events.vfs_open as f64);
-        self.nfs_vfs_events_total.inc_by(events.vfs_lookup as f64);
-        self.nfs_vfs_events_total.inc_by(events.vfs_read_page as f64);
-        self.nfs_vfs_events_total.inc_by(events.vfs_write_page as f64);
-        // ... add other VFS events as needed
+        // Create labels for VFS events
+        let labels = &[
+            mount.mount_point.as_str(),
+            mount.server.as_str()
+        ];
+
+        // Export each VFS event type to its own metric with labels
+        if events.vfs_open > 0 {
+            self.nfs_vfs_open_total.with_label_values(labels).inc_by(events.vfs_open as f64);
+        }
+        if events.vfs_lookup > 0 {
+            self.nfs_vfs_lookup_total.with_label_values(labels).inc_by(events.vfs_lookup as f64);
+        }
+        if events.vfs_access > 0 {
+            self.nfs_vfs_access_total.with_label_values(labels).inc_by(events.vfs_access as f64);
+        }
+        if events.vfs_read_page > 0 {
+            self.nfs_vfs_read_page_total.with_label_values(labels).inc_by(events.vfs_read_page as f64);
+        }
+        if events.vfs_write_page > 0 {
+            self.nfs_vfs_write_page_total.with_label_values(labels).inc_by(events.vfs_write_page as f64);
+        }
+        if events.vfs_getdents > 0 {
+            self.nfs_vfs_getdents_total.with_label_values(labels).inc_by(events.vfs_getdents as f64);
+        }
+        if events.vfs_setattr > 0 {
+            self.nfs_vfs_setattr_total.with_label_values(labels).inc_by(events.vfs_setattr as f64);
+        }
+        if events.vfs_flush > 0 {
+            self.nfs_vfs_flush_total.with_label_values(labels).inc_by(events.vfs_flush as f64);
+        }
+        if events.vfs_fsync > 0 {
+            self.nfs_vfs_fsync_total.with_label_values(labels).inc_by(events.vfs_fsync as f64);
+        }
+        // Note: We could add more VFS event types here as needed
     }
 
     fn export_mount_info_metrics(&self, mount: &NFSMount) {
-        self.nfs_mount_age_seconds.set(mount.age as f64);
-        self.nfs_mount_bytes_read_total.inc_by(mount.bytes_read as f64);
-        self.nfs_mount_bytes_written_total.inc_by(mount.bytes_write as f64);
+        // Create labels for mount metrics
+        let labels = &[
+            mount.mount_point.as_str(),
+            mount.server.as_str()
+        ];
+
+        self.nfs_mount_age_seconds.with_label_values(labels).set(mount.age as f64);
+        self.nfs_mount_bytes_read_total.with_label_values(labels).inc_by(mount.bytes_read as f64);
+        self.nfs_mount_bytes_written_total.with_label_values(labels).inc_by(mount.bytes_write as f64);
     }
 
     fn get_metrics_output(&self) -> Option<String> {

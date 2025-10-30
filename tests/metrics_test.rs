@@ -264,7 +264,7 @@ mod prometheus_tests {
 
         let metrics_text = metrics.unwrap();
         assert!(metrics_text.contains("nfs_operations_total"));
-        assert!(metrics_text.contains("nfs_operation_rtt_seconds"));
+        assert!(metrics_text.contains("nfs_operation_duration_seconds"));
     }
 
     #[tokio::test]
