@@ -1,7 +1,7 @@
 use crate::display::display_stats_simple;
 use crate::parser::parse_mountstats;
 use crate::stats::{calculate_delta_stats, filter_operations};
-use crate::types::{NFSMount, Result};
+use crate::types::{NFSMount, NfsGazeError, Result};
 use chrono::Utc;
 use signal_hook::{consts::SIGINT, consts::SIGTERM, iterator::Signals};
 use std::collections::{HashMap, HashSet};
@@ -10,6 +10,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Maximum number of consecutive `parse_mountstats` failures the
+/// monitoring loop will tolerate before giving up. Without this
+/// circuit breaker a permanent failure (e.g. `/proc` becoming
+/// unreadable) would loop forever printing the same error each
+/// interval.
+const MAX_CONSECUTIVE_PARSE_FAILURES: u32 = 10;
 
 /// Main monitoring structure
 pub struct Monitor {
@@ -101,6 +108,7 @@ impl Monitor {
 
         let mut iteration = 0;
         let mut last_update = Instant::now();
+        let mut consecutive_parse_failures: u32 = 0;
 
         while self.running.load(Ordering::SeqCst) {
             // Check if we've reached the iteration limit
@@ -113,9 +121,22 @@ impl Monitor {
 
             // Parse current mountstats
             let current_mounts = match parse_mountstats(mountstats_path) {
-                Ok(mounts) => mounts,
+                Ok(mounts) => {
+                    consecutive_parse_failures = 0;
+                    mounts
+                }
                 Err(e) => {
-                    eprintln!("Error reading mountstats: {}", e);
+                    consecutive_parse_failures += 1;
+                    eprintln!(
+                        "Error reading mountstats ({}/{}): {}",
+                        consecutive_parse_failures, MAX_CONSECUTIVE_PARSE_FAILURES, e
+                    );
+                    if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES {
+                        return Err(NfsGazeError::ParseError(format!(
+                            "Giving up after {} consecutive failures reading {}: {}",
+                            MAX_CONSECUTIVE_PARSE_FAILURES, mountstats_path, e
+                        )));
+                    }
                     continue;
                 }
             };
@@ -259,6 +280,39 @@ mod tests {
             Monitor::get_mounts_to_monitor(Some("/mnt/nonexistent".to_string()), &available_mounts);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_monitoring_loop_circuit_breaker_on_persistent_parse_failure() {
+        // Pointing the loop at a path that does not exist makes every
+        // parse_mountstats call fail. The circuit breaker must trip
+        // after MAX_CONSECUTIVE_PARSE_FAILURES iterations rather than
+        // looping forever.
+        let monitor = Monitor::new();
+        let result = monitor.monitoring_loop(
+            &mut Vec::<u8>::new(),
+            "/definitely/not/a/real/path/mountstats",
+            vec![],
+            HashSet::new(),
+            Duration::from_millis(1),
+            // count=0 means "infinite iterations"; we rely on the
+            // breaker to terminate, not the count limit.
+            0,
+            false,
+            false,
+            None,
+        );
+
+        let err = result.expect_err("expected the monitoring loop to bail out");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Giving up after"),
+            "unexpected error message: {msg}"
+        );
+        assert!(
+            msg.contains(&MAX_CONSECUTIVE_PARSE_FAILURES.to_string()),
+            "error should mention the failure threshold: {msg}"
+        );
     }
 
     #[test]

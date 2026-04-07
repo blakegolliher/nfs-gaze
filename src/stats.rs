@@ -1,6 +1,12 @@
 use crate::types::{DeltaStats, NFSMount, NFSOperation};
 
-/// Calculate delta statistics between two measurements
+/// Calculate delta statistics between two measurements.
+///
+/// Operations whose monotonic counters have moved backwards since the
+/// previous sample are treated as having been reset (typically due to
+/// a remount or `umount`/`mount` cycle that re-initialised
+/// `/proc/self/mountstats`) and dropped from this batch. The next
+/// sample will compute a fresh delta against the post-reset values.
 pub fn calculate_delta_stats(
     previous: &NFSMount,
     current: &NFSMount,
@@ -9,13 +15,12 @@ pub fn calculate_delta_stats(
     let mut deltas = Vec::new();
 
     for (op_name, current_op) in &current.operations {
-        if let Some(previous_op) = previous.operations.get(op_name) {
-            let delta = calculate_operation_delta(previous_op, current_op, elapsed_seconds);
-            if delta.delta_ops > 0 {
-                deltas.push(delta);
-            }
+        let delta = if let Some(previous_op) = previous.operations.get(op_name) {
+            calculate_operation_delta(previous_op, current_op, elapsed_seconds)
         } else {
-            // New operation, treat previous as zeros
+            // New operation seen for the first time — treat the previous
+            // sample as all-zeros so the first delta reflects the entire
+            // observed history.
             let zero_op = NFSOperation {
                 name: op_name.clone(),
                 ops: 0,
@@ -28,7 +33,10 @@ pub fn calculate_delta_stats(
                 execute_time: 0,
                 errors: 0,
             };
-            let delta = calculate_operation_delta(&zero_op, current_op, elapsed_seconds);
+            calculate_operation_delta(&zero_op, current_op, elapsed_seconds)
+        };
+
+        if let Some(delta) = delta {
             if delta.delta_ops > 0 {
                 deltas.push(delta);
             }
@@ -40,12 +48,35 @@ pub fn calculate_delta_stats(
     deltas
 }
 
-/// Calculate delta statistics for a single operation
+/// Calculate delta statistics for a single operation.
+///
+/// Returns `None` if any underlying counter has moved backwards
+/// relative to the previous sample, which indicates the kernel reset
+/// the per-mount stats (remount, `umount`/`mount`, or container
+/// restart). Callers should treat a `None` result as "skip this
+/// sample" rather than "no activity".
 fn calculate_operation_delta(
     previous: &NFSOperation,
     current: &NFSOperation,
     elapsed_seconds: f64,
-) -> DeltaStats {
+) -> Option<DeltaStats> {
+    // Detect counter reset: if any monotonic field went backwards we
+    // cannot compute a meaningful delta, and feeding negative values
+    // into Prometheus's `Counter::inc_by` would panic. Skip this
+    // sample entirely; the next one will rebase against the
+    // post-reset values.
+    if current.ops < previous.ops
+        || current.bytes_sent < previous.bytes_sent
+        || current.bytes_recv < previous.bytes_recv
+        || current.rtt < previous.rtt
+        || current.execute_time < previous.execute_time
+        || current.queue_time < previous.queue_time
+        || current.errors < previous.errors
+        || current.timeouts < previous.timeouts
+    {
+        return None;
+    }
+
     let delta_ops = current.ops - previous.ops;
     let delta_sent = current.bytes_sent - previous.bytes_sent;
     let delta_recv = current.bytes_recv - previous.bytes_recv;
@@ -93,7 +124,7 @@ fn calculate_operation_delta(
         0.0
     };
 
-    DeltaStats {
+    Some(DeltaStats {
         operation: current.name.clone(),
         delta_ops,
         delta_bytes,
@@ -110,7 +141,7 @@ fn calculate_operation_delta(
         kb_per_op,
         kb_per_sec,
         iops,
-    }
+    })
 }
 
 /// Filter operations based on a set of allowed operation names
@@ -161,6 +192,64 @@ mod tests {
         assert_eq!(delta.iops, 100.0);
         assert_eq!(delta.avg_rtt, 10.0); // delta_rtt / delta_ops
         assert_eq!(delta.avg_exec, 20.0); // delta_exec / delta_ops
+    }
+
+    #[test]
+    fn test_counter_reset_drops_sample() {
+        // Simulate a remount: the "current" sample's counters are
+        // smaller than the previous sample for the same operation.
+        // calculate_delta_stats must drop the operation entirely
+        // (not return a row with negative deltas, which would later
+        // panic inside Prometheus's Counter::inc_by).
+        let mut prev_ops = HashMap::new();
+        prev_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 10_000, 1_048_576, 2_097_152, 5_000, 8_000),
+        );
+
+        let mut curr_ops = HashMap::new();
+        curr_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 50, 4_096, 8_192, 10, 20),
+        );
+
+        let previous = create_test_mount_with_operations(prev_ops);
+        let current = create_test_mount_with_operations(curr_ops);
+
+        let deltas = calculate_delta_stats(&previous, &current, 1.0);
+
+        assert!(
+            deltas.is_empty(),
+            "expected counter-reset sample to be dropped, got {:?}",
+            deltas
+        );
+    }
+
+    #[test]
+    fn test_counter_reset_recovers_on_next_sample() {
+        // After a reset, the very next sample (where counters are
+        // monotonically growing again) must produce a normal delta.
+        let mut reset_ops = HashMap::new();
+        reset_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 50, 4_096, 8_192, 10, 20),
+        );
+
+        let mut next_ops = HashMap::new();
+        next_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 150, 8_192, 16_384, 30, 60),
+        );
+
+        let previous = create_test_mount_with_operations(reset_ops);
+        let current = create_test_mount_with_operations(next_ops);
+
+        let deltas = calculate_delta_stats(&previous, &current, 1.0);
+
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].operation, "READ");
+        assert_eq!(deltas[0].delta_ops, 100);
+        assert_eq!(deltas[0].delta_bytes, 4_096 + 8_192);
     }
 
     #[test]

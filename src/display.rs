@@ -124,7 +124,7 @@ mod tests {
             Self { buffer: Vec::new() }
         }
 
-        fn to_string(&self) -> String {
+        fn output(&self) -> String {
             String::from_utf8(self.buffer.clone()).unwrap()
         }
     }
@@ -159,7 +159,7 @@ mod tests {
         let mut writer = MockWriter::new();
 
         display_stats_simple(&mut writer, &mount, &stats, false, &timestamp).unwrap();
-        let output = writer.to_string();
+        let output = writer.output();
 
         assert!(output.is_empty());
     }

@@ -5,7 +5,7 @@
 
 #![cfg(test)]
 
-use crate::types::{NFSMount, NFSOperation, NFSEvents, DeltaStats};
+use crate::types::{DeltaStats, NFSEvents, NFSMount, NFSOperation};
 use std::collections::HashMap;
 
 /// Creates a basic test mount with default values
@@ -62,7 +62,7 @@ pub fn create_test_operation_with_stats(
     NFSOperation {
         name: name.to_string(),
         ops,
-        ntrans: ops - 5,  // Simulate some retransmissions
+        ntrans: ops - 5, // Simulate some retransmissions
         timeouts: 0,
         bytes_sent,
         bytes_recv,
@@ -110,17 +110,20 @@ pub fn create_default_events() -> NFSEvents {
 pub fn create_default_operations() -> HashMap<String, NFSOperation> {
     let mut operations = HashMap::new();
 
-    operations.insert("READ".to_string(), create_test_operation_with_stats(
-        "READ", 1000, 10240, 20480, 200, 300
-    ));
+    operations.insert(
+        "READ".to_string(),
+        create_test_operation_with_stats("READ", 1000, 10240, 20480, 200, 300),
+    );
 
-    operations.insert("WRITE".to_string(), create_test_operation_with_stats(
-        "WRITE", 500, 51200, 10240, 250, 400
-    ));
+    operations.insert(
+        "WRITE".to_string(),
+        create_test_operation_with_stats("WRITE", 500, 51200, 10240, 250, 400),
+    );
 
-    operations.insert("GETATTR".to_string(), create_test_operation_with_stats(
-        "GETATTR", 2000, 4096, 8192, 100, 150
-    ));
+    operations.insert(
+        "GETATTR".to_string(),
+        create_test_operation_with_stats("GETATTR", 2000, 4096, 8192, 100, 150),
+    );
 
     operations
 }
@@ -158,10 +161,9 @@ pub fn create_test_delta_stat(operation: &str, delta_ops: i64, delta_bytes: i64)
 /// Helper function to parse device string into server and export
 fn parse_device(device: &str) -> (String, String) {
     let parts: Vec<&str> = device.splitn(2, ':').collect();
-    let server = parts.get(0)
-        .unwrap_or(&"")
-        .to_string();
-    let export = parts.get(1)
+    let server = parts.first().unwrap_or(&"").to_string();
+    let export = parts
+        .get(1)
         .map(|s| s.to_string())
         .unwrap_or_else(|| "/".to_string());
     (server, export)
@@ -177,5 +179,6 @@ pub fn create_test_mountstats_data() -> String {
         READ: 1000 995 5 10240 20480 100 200 300 10
         WRITE: 500 495 5 51200 10240 150 250 400 5
         GETATTR: 2000 2000 0 4096 8192 50 100 150 0
-"#.to_string()
+"#
+    .to_string()
 }

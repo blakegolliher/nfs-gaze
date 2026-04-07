@@ -1,6 +1,6 @@
 use nfs_gaze::{
     metrics::{MetricsConfig, MetricsManager},
-    types::{NFSMount, NFSOperation, NFSEvents, DeltaStats},
+    types::{DeltaStats, NFSEvents, NFSMount, NFSOperation},
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -8,44 +8,53 @@ use std::time::Duration;
 fn create_test_mount(device: &str, mount_point: &str) -> NFSMount {
     let mut operations = HashMap::new();
 
-    operations.insert("READ".to_string(), NFSOperation {
-        name: "READ".to_string(),
-        ops: 1000,
-        ntrans: 950,
-        timeouts: 50,
-        bytes_sent: 10240,
-        bytes_recv: 20480,
-        queue_time: 100,
-        rtt: 200,
-        execute_time: 300,
-        errors: 10,
-    });
+    operations.insert(
+        "READ".to_string(),
+        NFSOperation {
+            name: "READ".to_string(),
+            ops: 1000,
+            ntrans: 950,
+            timeouts: 50,
+            bytes_sent: 10240,
+            bytes_recv: 20480,
+            queue_time: 100,
+            rtt: 200,
+            execute_time: 300,
+            errors: 10,
+        },
+    );
 
-    operations.insert("WRITE".to_string(), NFSOperation {
-        name: "WRITE".to_string(),
-        ops: 500,
-        ntrans: 490,
-        timeouts: 10,
-        bytes_sent: 51200,
-        bytes_recv: 10240,
-        queue_time: 150,
-        rtt: 250,
-        execute_time: 400,
-        errors: 5,
-    });
+    operations.insert(
+        "WRITE".to_string(),
+        NFSOperation {
+            name: "WRITE".to_string(),
+            ops: 500,
+            ntrans: 490,
+            timeouts: 10,
+            bytes_sent: 51200,
+            bytes_recv: 10240,
+            queue_time: 150,
+            rtt: 250,
+            execute_time: 400,
+            errors: 5,
+        },
+    );
 
-    operations.insert("GETATTR".to_string(), NFSOperation {
-        name: "GETATTR".to_string(),
-        ops: 2000,
-        ntrans: 2000,
-        timeouts: 0,
-        bytes_sent: 4096,
-        bytes_recv: 8192,
-        queue_time: 50,
-        rtt: 100,
-        execute_time: 150,
-        errors: 0,
-    });
+    operations.insert(
+        "GETATTR".to_string(),
+        NFSOperation {
+            name: "GETATTR".to_string(),
+            ops: 2000,
+            ntrans: 2000,
+            timeouts: 0,
+            bytes_sent: 4096,
+            bytes_recv: 8192,
+            queue_time: 50,
+            rtt: 100,
+            execute_time: 150,
+            errors: 0,
+        },
+    );
 
     NFSMount {
         device: device.to_string(),
@@ -168,16 +177,14 @@ fn test_metrics_config_custom_values() {
     let config = MetricsConfig {
         enable_prometheus: true,
         prometheus_port: 8080,
-        enable_opentelemetry: true,
-        otel_endpoint: Some("http://localhost:4317".to_string()),
+        prometheus_bind: "0.0.0.0".to_string(),
         export_interval: Duration::from_secs(30),
         include_labels: false,
     };
 
     assert!(config.enable_prometheus);
     assert_eq!(config.prometheus_port, 8080);
-    assert!(config.enable_opentelemetry);
-    assert_eq!(config.otel_endpoint, Some("http://localhost:4317".to_string()));
+    assert_eq!(config.prometheus_bind, "0.0.0.0");
     assert_eq!(config.export_interval, Duration::from_secs(30));
     assert!(!config.include_labels);
 }
@@ -287,39 +294,6 @@ mod prometheus_tests {
     }
 }
 
-#[cfg(feature = "opentelemetry")]
-mod opentelemetry_tests {
-    use super::*;
-
-    #[test]
-    fn test_opentelemetry_enabled_manager() {
-        let config = MetricsConfig {
-            enable_opentelemetry: true,
-            otel_endpoint: Some("http://localhost:4317".to_string()),
-            ..Default::default()
-        };
-
-        let manager = MetricsManager::new(config).expect("Failed to create metrics manager");
-        assert!(manager.is_enabled());
-    }
-
-    #[test]
-    fn test_opentelemetry_export() {
-        let config = MetricsConfig {
-            enable_opentelemetry: true,
-            otel_endpoint: Some("http://localhost:4318".to_string()),
-            ..Default::default()
-        };
-
-        let manager = MetricsManager::new(config).expect("Failed to create metrics manager");
-        let mount = create_test_mount("server:/export", "/mnt/test");
-        let stats = create_test_delta_stats();
-
-        // Should export without panic even if endpoint is not available
-        manager.export_metrics(&mount, &stats);
-    }
-}
-
 #[test]
 fn test_concurrent_metrics_export() {
     use std::sync::Arc;
@@ -333,7 +307,8 @@ fn test_concurrent_metrics_export() {
     for i in 0..10 {
         let manager_clone = Arc::clone(&manager);
         let handle = thread::spawn(move || {
-            let mount = create_test_mount(&format!("server{}:/export", i), &format!("/mnt/test{}", i));
+            let mount =
+                create_test_mount(&format!("server{}:/export", i), &format!("/mnt/test{}", i));
             let stats = create_test_delta_stats();
             manager_clone.export_metrics(&mount, &stats);
         });

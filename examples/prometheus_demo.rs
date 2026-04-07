@@ -1,21 +1,20 @@
-/// Demo showing how to enable Prometheus metrics export
-///
-/// Usage:
-/// cargo run --example prometheus_demo --features prometheus -- --prometheus --prometheus-port 9090
+//! Demo showing how to enable Prometheus metrics export.
+//!
+//! Usage:
+//!     cargo run --example prometheus_demo --features prometheus
 
 use nfs_gaze::{
     metrics::{MetricsConfig, MetricsManager},
-    types::{NFSMount, DeltaStats},
+    types::{DeltaStats, NFSMount},
 };
 use std::collections::HashMap;
 
 fn main() {
-    // Simulate CLI args for Prometheus
+    // Build a Prometheus-enabled config
     let metrics_config = MetricsConfig {
         enable_prometheus: true,
-        prometheus_port: 9090,
-        enable_opentelemetry: false,
-        otel_endpoint: None,
+        prometheus_port: 9100,
+        prometheus_bind: "127.0.0.1".to_string(),
         export_interval: std::time::Duration::from_secs(10),
         include_labels: true,
     };
@@ -25,30 +24,28 @@ fn main() {
         Ok(manager) => {
             if manager.is_enabled() {
                 println!("Prometheus metrics export enabled!");
-                println!("Metrics would be available at http://localhost:9090/metrics");
+                println!("Metrics would be available at http://127.0.0.1:9100/metrics");
 
                 // Create sample data
                 let operations = HashMap::new();
-                let sample_stats = vec![
-                    DeltaStats {
-                        operation: "READ".to_string(),
-                        delta_ops: 100,
-                        delta_bytes: 1024000,
-                        delta_sent: 512000,
-                        delta_recv: 512000,
-                        delta_rtt: 500,
-                        delta_exec: 800,
-                        delta_queue: 100,
-                        delta_errors: 2,
-                        delta_retrans: 1,
-                        avg_rtt: 5.0,
-                        avg_exec: 8.0,
-                        avg_queue: 1.0,
-                        kb_per_op: 10.0,
-                        kb_per_sec: 1000.0,
-                        iops: 100.0,
-                    }
-                ];
+                let sample_stats = vec![DeltaStats {
+                    operation: "READ".to_string(),
+                    delta_ops: 100,
+                    delta_bytes: 1024000,
+                    delta_sent: 512000,
+                    delta_recv: 512000,
+                    delta_rtt: 500,
+                    delta_exec: 800,
+                    delta_queue: 100,
+                    delta_errors: 2,
+                    delta_retrans: 1,
+                    avg_rtt: 5.0,
+                    avg_exec: 8.0,
+                    avg_queue: 1.0,
+                    kb_per_op: 10.0,
+                    kb_per_sec: 1000.0,
+                    iops: 100.0,
+                }];
 
                 let sample_mount = NFSMount {
                     device: "demo-server:/export".to_string(),

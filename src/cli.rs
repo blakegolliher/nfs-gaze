@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 #[derive(Parser, Debug)]
 #[command(name = "nfs-gaze")]
+#[command(version)]
 #[command(about = "NFS I/O Statistics Monitor")]
 #[command(long_about = r#"
 NFS I/O Statistics Monitor
@@ -11,8 +12,11 @@ Monitor NFS mount point I/O statistics in real-time by parsing /proc/self/mounts
 Displays operations per second, latency metrics, and bandwidth statistics.
 
 Examples:
-  # Monitor with attribute cache statistics
-  nfs-gaze /mnt/nfs --attr
+  # Monitor all NFS mounts
+  nfs-gaze
+
+  # Monitor a specific mount point
+  nfs-gaze -m /mnt/nfs
 
   # Monitor specific operations with bandwidth
   nfs-gaze -m /mnt/nfs --ops READ,WRITE --bw
@@ -37,10 +41,6 @@ pub struct Args {
     #[arg(short = 'c', long, default_value = "0")]
     pub count: usize,
 
-    /// Show attribute cache statistics
-    #[arg(long = "attr")]
-    pub show_attr: bool,
-
     /// Show bandwidth statistics
     #[arg(long = "bw")]
     pub show_bandwidth: bool,
@@ -58,20 +58,15 @@ pub struct Args {
     #[arg(long)]
     pub prometheus: bool,
 
+    /// Prometheus metrics server bind address
+    #[cfg(feature = "prometheus")]
+    #[arg(long, default_value = "127.0.0.1")]
+    pub prometheus_bind: String,
+
     /// Prometheus metrics server port
     #[cfg(feature = "prometheus")]
-    #[arg(long, default_value = "9090")]
+    #[arg(long, default_value = "9100")]
     pub prometheus_port: u16,
-
-    /// Enable OpenTelemetry metrics export
-    #[cfg(feature = "opentelemetry")]
-    #[arg(long)]
-    pub opentelemetry: bool,
-
-    /// OpenTelemetry collector endpoint
-    #[cfg(feature = "opentelemetry")]
-    #[arg(long)]
-    pub otel_endpoint: Option<String>,
 
     /// Metrics export interval in seconds
     #[arg(long, default_value = "10")]
@@ -88,19 +83,14 @@ impl Args {
             enable_prometheus: false,
 
             #[cfg(feature = "prometheus")]
+            prometheus_bind: self.prometheus_bind.clone(),
+            #[cfg(not(feature = "prometheus"))]
+            prometheus_bind: "127.0.0.1".to_string(),
+
+            #[cfg(feature = "prometheus")]
             prometheus_port: self.prometheus_port,
             #[cfg(not(feature = "prometheus"))]
-            prometheus_port: 9090,
-
-            #[cfg(feature = "opentelemetry")]
-            enable_opentelemetry: self.opentelemetry,
-            #[cfg(not(feature = "opentelemetry"))]
-            enable_opentelemetry: false,
-
-            #[cfg(feature = "opentelemetry")]
-            otel_endpoint: self.otel_endpoint.clone(),
-            #[cfg(not(feature = "opentelemetry"))]
-            otel_endpoint: None,
+            prometheus_port: 9100,
 
             export_interval: std::time::Duration::from_secs(self.metrics_interval),
             include_labels: true,

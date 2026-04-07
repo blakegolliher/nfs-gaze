@@ -26,23 +26,19 @@ async fn run_linux() -> anyhow::Result<()> {
 
     // Initialize metrics manager if observability features are enabled
     let metrics_config = args.to_metrics_config();
-    let metrics_manager = if metrics_config.enable_prometheus || metrics_config.enable_opentelemetry {
+    let metrics_manager = if metrics_config.enable_prometheus {
         let manager = MetricsManager::new(metrics_config)
             .map_err(|e| anyhow::anyhow!("Failed to initialize metrics: {}", e))?;
 
         if manager.is_enabled() {
-            println!("Metrics export enabled");
-
             // Start Prometheus HTTP server if enabled
             #[cfg(feature = "prometheus")]
             if args.prometheus {
                 manager.start_prometheus_server();
-                println!("Prometheus metrics available at http://0.0.0.0:{}/metrics", args.prometheus_port);
-            }
-
-            #[cfg(feature = "opentelemetry")]
-            if args.opentelemetry {
-                println!("OpenTelemetry metrics export enabled");
+                println!(
+                    "Prometheus metrics available at http://{}:{}/metrics",
+                    args.prometheus_bind, args.prometheus_port
+                );
             }
         }
         Some(manager)
@@ -51,11 +47,19 @@ async fn run_linux() -> anyhow::Result<()> {
     };
 
     // Read initial mountstats to find available mounts
-    let initial_mounts = parse_mountstats(&args.mountstats_path)
-        .map_err(|e| anyhow::anyhow!("Error reading mountstats from {}: {}", args.mountstats_path, e))?;
+    let initial_mounts = parse_mountstats(&args.mountstats_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Error reading mountstats from {}: {}",
+            args.mountstats_path,
+            e
+        )
+    })?;
 
     if initial_mounts.is_empty() {
-        return Err(anyhow::anyhow!("No NFS mounts found in {}", args.mountstats_path));
+        return Err(anyhow::anyhow!(
+            "No NFS mounts found in {}",
+            args.mountstats_path
+        ));
     }
 
     // Determine which mounts to monitor
@@ -84,17 +88,19 @@ async fn run_linux() -> anyhow::Result<()> {
     let interval = Duration::from_secs(args.interval);
 
     // Start monitoring loop
-    monitor.monitoring_loop(
-        &mut stdout,
-        &args.mountstats_path,
-        monitor_mounts,
-        operations_filter,
-        interval,
-        args.count,
-        args.show_bandwidth,
-        args.clear_screen,
-        metrics_manager.as_ref(),
-    ).map_err(|e| anyhow::anyhow!("Monitoring error: {}", e))?;
+    monitor
+        .monitoring_loop(
+            &mut stdout,
+            &args.mountstats_path,
+            monitor_mounts,
+            operations_filter,
+            interval,
+            args.count,
+            args.show_bandwidth,
+            args.clear_screen,
+            metrics_manager.as_ref(),
+        )
+        .map_err(|e| anyhow::anyhow!("Monitoring error: {}", e))?;
 
     println!("Monitoring stopped.");
     Ok(())

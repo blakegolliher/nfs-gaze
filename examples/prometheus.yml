@@ -3,7 +3,8 @@
 # Usage:
 # 1. Start nfs-gaze with Prometheus enabled:
 #    cargo build --features prometheus --release
-#    ./target/release/nfs-gaze --prometheus --prometheus-port 9090
+#    ./target/release/nfs-gaze --prometheus
+#    (defaults: --prometheus-bind 127.0.0.1 --prometheus-port 9100)
 #
 # 2. Start Prometheus with this config:
 #    prometheus --config.file=examples/prometheus.yml
@@ -30,13 +31,13 @@ scrape_configs:
 
     static_configs:
       # Single nfs-gaze instance
-      - targets: ['localhost:9090']
+      - targets: ['localhost:9100']
         labels:
           instance: 'nfs-server-01'
           environment: 'production'
 
       # Multiple nfs-gaze instances (if monitoring multiple servers)
-      # - targets: ['nfs-server-02:9090', 'nfs-server-03:9090']
+      # - targets: ['nfs-server-02:9100', 'nfs-server-03:9100']
       #   labels:
       #     environment: 'production'
 

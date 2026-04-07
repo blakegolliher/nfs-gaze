@@ -14,7 +14,7 @@ impl MockWriter {
         Self { buffer: Vec::new() }
     }
 
-    fn to_string(&self) -> String {
+    fn output(&self) -> String {
         String::from_utf8(self.buffer.clone()).unwrap()
     }
 }
@@ -87,7 +87,7 @@ fn test_display_stats_simple_without_bandwidth() {
     let mut writer = MockWriter::new();
 
     display_stats_simple(&mut writer, &mount, &stats, false, &timestamp).unwrap();
-    let output = writer.to_string();
+    let output = writer.output();
 
     assert!(
         output.contains("READ"),
@@ -164,7 +164,7 @@ fn test_display_stats_simple_with_bandwidth() {
     let mut writer = MockWriter::new();
 
     display_stats_simple(&mut writer, &mount, &stats, true, &timestamp).unwrap();
-    let output = writer.to_string();
+    let output = writer.output();
 
     assert!(
         output.contains("READ"),
@@ -203,7 +203,7 @@ fn test_display_stats_simple_empty_stats() {
     let mut writer = MockWriter::new();
 
     display_stats_simple(&mut writer, &mount, &stats, false, &timestamp).unwrap();
-    let output = writer.to_string();
+    let output = writer.output();
 
     // Should have minimal output for empty stats
     assert!(

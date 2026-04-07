@@ -2,150 +2,225 @@
 
 ## Overview
 
-`nfs-gaze` provides a built-in Prometheus metrics exporter that exposes NFS I/O statistics and mount information through an HTTP endpoint. This allows you to integrate NFS performance monitoring into your existing Prometheus monitoring stack.
+`nfs-gaze` ships with an optional Prometheus metrics exporter that exposes
+NFS I/O statistics, VFS event counters, and per-mount information through
+an HTTP `/metrics` endpoint. This lets you scrape detailed per-operation
+NFS performance data into your existing Prometheus + Grafana stack
+without installing eBPF tools, kernel modules, or running as root.
+
+The exporter is gated behind the `prometheus` cargo feature so the
+default build stays lean for users who only want the live terminal
+display.
 
 ## Quick Start
 
-### Running with Prometheus Metrics
+### Build with Prometheus support
 
 ```bash
-# Build with Prometheus feature enabled
 cargo build --release --features prometheus
-
-# Run with default settings (port 9090)
-./target/release/nfs-gaze -m /mnt/nfs --prometheus
-
-# Run with custom port
-./target/release/nfs-gaze -m /mnt/nfs --prometheus --prometheus-port 9091
-
-# Run with specific update interval
-./target/release/nfs-gaze -m /mnt/nfs --prometheus --prometheus-port 9091 -i 5
 ```
 
-### Available Endpoints
+### Run the exporter
 
-Once running with `--prometheus`, the following HTTP endpoints are available:
+```bash
+# Defaults: bind 127.0.0.1, port 9100
+./target/release/nfs-gaze --prometheus
 
-- `http://localhost:9090/metrics` - Prometheus metrics in text format
-- `http://localhost:9090/health` - Health check endpoint (returns "OK")
-- `http://localhost:9090/` - Information page with available endpoints
+# Bind on all interfaces (e.g. for a remote Prometheus scraper)
+./target/release/nfs-gaze --prometheus \
+    --prometheus-bind 0.0.0.0 \
+    --prometheus-port 9100
+
+# Monitor a specific mount and a tighter sample interval
+./target/release/nfs-gaze -m /mnt/nfs --prometheus -i 5
+```
+
+When the server starts you will see a log line on stderr:
+
+```
+Prometheus metrics server listening on http://127.0.0.1:9100/metrics
+```
+
+### Available HTTP endpoints
+
+| Path       | Description                                              |
+|------------|----------------------------------------------------------|
+| `/metrics` | Prometheus text exposition format                        |
+| `/health`  | Liveness check, returns `OK\n` with HTTP 200             |
+| `/`        | Plain-text index page listing the endpoints              |
+
+Any other path returns `404 Not Found`.
+
+### CLI flags
+
+These flags are only present when the binary was built with the
+`prometheus` feature.
+
+| Flag                  | Default     | Description                                |
+|-----------------------|-------------|--------------------------------------------|
+| `--prometheus`        | `false`     | Enable the Prometheus HTTP exporter        |
+| `--prometheus-bind`   | `127.0.0.1` | Address the HTTP server binds to           |
+| `--prometheus-port`   | `9100`      | Port the HTTP server listens on            |
+| `--metrics-interval`  | `10`        | Metrics export interval in seconds         |
 
 ## Metrics Reference
 
-### Operation Metrics
+All metrics carry contextual labels — there are **no unlabelled
+aggregates**. The label sets used are:
+
+- **Operation labels** (`mount_point`, `server`, `operation`) — applied to
+  every per-operation metric.
+- **Mount labels** (`mount_point`, `server`) — applied to VFS event
+  counters and per-mount metrics.
+
+Where:
+
+- `mount_point` is the local path the NFS share is mounted on (e.g.
+  `/mnt/nfs`).
+- `server` is the NFS server hostname or address parsed from the
+  `device` field.
+- `operation` is the NFS RPC name (`READ`, `WRITE`, `GETATTR`,
+  `LOOKUP`, …).
+
+### Operation metrics
 
 #### `nfs_operations_total`
 - **Type**: Counter
-- **Description**: Total number of NFS operations performed
-- **Labels**: None (aggregated across all operation types)
-- **Use Case**: Track overall NFS activity volume
-- **Example Value**: `nfs_operations_total 2906`
+- **Labels**: `mount_point`, `server`, `operation`
+- **Description**: Total NFS operations performed since the exporter
+  started, broken down by operation type.
+- **Use**: IOPS calculations, traffic mix analysis.
+
+```
+nfs_operations_total{mount_point="/mnt/nfs",server="nfs-server",operation="READ"} 1547
+nfs_operations_total{mount_point="/mnt/nfs",server="nfs-server",operation="WRITE"} 312
+```
 
 #### `nfs_operation_duration_seconds`
 - **Type**: Histogram
-- **Description**: Duration of NFS operations in seconds (RTT - Round Trip Time)
-- **Labels**: None
-- **Buckets**: 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 seconds
-- **Use Case**: Analyze operation latency distribution and identify performance issues
-- **Example**:
-  ```
-  nfs_operation_duration_seconds_bucket{le="0.001"} 1250
-  nfs_operation_duration_seconds_bucket{le="0.005"} 1489
-  nfs_operation_duration_seconds_bucket{le="0.01"} 1502
-  ...
-  nfs_operation_duration_seconds_sum 12.5
-  nfs_operation_duration_seconds_count 1502
-  ```
+- **Labels**: `mount_point`, `server`, `operation`
+- **Description**: Round-trip time (RTT) of each NFS operation in
+  seconds. nfs-gaze converts the per-op `rtt` value reported by
+  `/proc/self/mountstats` from milliseconds to seconds before
+  observing.
+- **Buckets** (seconds): `0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
+  0.5, 1.0, 2.5, 5.0, 10.0`
+- **Use**: Latency percentiles per operation type, alerting on tail
+  latency.
+
+```
+nfs_operation_duration_seconds_bucket{mount_point="/mnt/nfs",server="nfs-server",operation="READ",le="0.005"} 120
+nfs_operation_duration_seconds_bucket{mount_point="/mnt/nfs",server="nfs-server",operation="READ",le="0.01"}  890
+nfs_operation_duration_seconds_sum{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}              12.456
+nfs_operation_duration_seconds_count{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}            1547
+```
 
 #### `nfs_operation_bytes_total`
 - **Type**: Counter
-- **Description**: Total bytes transferred in NFS operations (read + write)
-- **Labels**: None
-- **Use Case**: Monitor data transfer volume
-- **Example Value**: `nfs_operation_bytes_total 3041718780`
+- **Labels**: `mount_point`, `server`, `operation`
+- **Description**: Total bytes transferred (sent + received) per
+  operation type.
+- **Use**: Per-operation throughput, identifying which RPCs dominate
+  bandwidth.
 
 #### `nfs_operation_errors_total`
 - **Type**: Counter
-- **Description**: Total number of NFS operation errors
-- **Labels**: None
-- **Use Case**: Track error rates and identify reliability issues
-- **Example Value**: `nfs_operation_errors_total 1`
+- **Labels**: `mount_point`, `server`, `operation`
+- **Description**: Total NFS operation errors per operation type.
+- **Use**: Error-rate alerts, correlating failures with specific RPCs.
 
 #### `nfs_operation_timeouts_total`
 - **Type**: Counter
-- **Description**: Total number of NFS operation timeouts (retransmissions)
-- **Labels**: None
-- **Use Case**: Identify network or server responsiveness issues
-- **Example Value**: `nfs_operation_timeouts_total 0`
+- **Labels**: `mount_point`, `server`, `operation`
+- **Description**: Total NFS operation timeouts (retransmissions) per
+  operation type.
+- **Use**: Detecting network or server responsiveness issues without
+  waiting for outright errors.
 
-### VFS Event Metrics
+### VFS event metrics
 
-#### `nfs_vfs_events_total`
-- **Type**: Counter
-- **Description**: Total number of NFS VFS (Virtual File System) events
-- **Labels**: None
-- **Use Case**: Track file system level operations
-- **Includes**: vfs_open, vfs_lookup, vfs_read_page, vfs_write_page events
-- **Example Value**: `nfs_vfs_events_total 9`
+VFS counters report kernel-side virtual file system events that
+nfs-gaze parses from the `events:` line in `/proc/self/mountstats`.
+Each event type is exposed as its own counter so you can chart and
+alert on them independently. All carry the mount labels
+(`mount_point`, `server`).
 
-### Mount Information Metrics
+| Metric                    | Source field        | Description                            |
+|---------------------------|---------------------|----------------------------------------|
+| `nfs_vfs_open_total`      | `vfs_open`          | File opens against the mount           |
+| `nfs_vfs_lookup_total`    | `vfs_lookup`        | Path-component lookups                 |
+| `nfs_vfs_access_total`    | `vfs_access`        | Permission checks                      |
+| `nfs_vfs_read_page_total` | `vfs_read_page`     | Page-cache read fills                  |
+| `nfs_vfs_write_page_total`| `vfs_write_page`    | Page-cache write-backs                 |
+| `nfs_vfs_getdents_total`  | `vfs_getdents`      | Directory enumeration calls            |
+| `nfs_vfs_setattr_total`   | `vfs_setattr`       | Attribute updates                      |
+| `nfs_vfs_flush_total`     | `vfs_flush`         | File flushes (close-to-open semantics) |
+| `nfs_vfs_fsync_total`     | `vfs_fsync`         | Explicit fsync calls                   |
+
+A counter is only updated when its underlying delta is non-zero, so
+mounts with no activity will not register samples between scrapes.
+
+### Mount information metrics
+
+All carry the mount labels (`mount_point`, `server`).
 
 #### `nfs_mount_age_seconds`
 - **Type**: Gauge
-- **Description**: Age of the NFS mount in seconds (time since mount)
-- **Labels**: None
-- **Use Case**: Monitor mount stability and uptime
-- **Example Value**: `nfs_mount_age_seconds 40`
+- **Description**: Age of the NFS mount in seconds, taken from the
+  `age:` field in `/proc/self/mountstats`.
+- **Use**: Detecting recent remounts (a sudden drop indicates the
+  mount was re-established).
 
 #### `nfs_mount_bytes_read_total`
 - **Type**: Counter
-- **Description**: Total bytes read from the NFS mount since mount time
-- **Labels**: None
-- **Use Case**: Track read volume over mount lifetime
-- **Example Value**: `nfs_mount_bytes_read_total 0`
+- **Description**: Cumulative bytes read from the mount since it was
+  established (sourced from the `bytes:` line, not summed from per-op
+  counters).
+- **Use**: Lifetime read volume, sanity-checking against per-op
+  totals.
 
 #### `nfs_mount_bytes_written_total`
 - **Type**: Counter
-- **Description**: Total bytes written to the NFS mount since mount time
-- **Labels**: None
-- **Use Case**: Track write volume over mount lifetime
-- **Example Value**: `nfs_mount_bytes_written_total 5837422592`
+- **Description**: Cumulative bytes written to the mount since it was
+  established.
+- **Use**: Lifetime write volume.
 
 ## Prometheus Configuration
 
-### Basic Scrape Configuration
-
-Add this to your `prometheus.yml`:
+### Basic scrape
 
 ```yaml
 scrape_configs:
   - job_name: 'nfs-gaze'
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ['localhost:9100']
     scrape_interval: 15s
     metrics_path: /metrics
 ```
 
-### Multiple NFS Monitors
+A working example lives at `examples/prometheus.yml` in this
+repository.
 
-If monitoring multiple NFS mounts on different ports:
+### Multiple hosts
 
 ```yaml
 scrape_configs:
   - job_name: 'nfs-gaze'
     static_configs:
       - targets:
-        - 'server1:9090'  # Monitor for /mnt/nfs1
-        - 'server1:9091'  # Monitor for /mnt/nfs2
-        - 'server2:9090'  # Monitor on different host
+          - 'host-a:9100'
+          - 'host-b:9100'
         labels:
-          environment: 'production'
+          environment: production
     scrape_interval: 15s
 ```
 
-### With Service Discovery
+Because every metric already carries `mount_point` and `server`
+labels, you do **not** need a separate scrape job per mount on the
+same host — a single nfs-gaze instance covers every NFS mount in its
+namespace.
 
-For Kubernetes environments:
+### Kubernetes service discovery
 
 ```yaml
 scrape_configs:
@@ -158,225 +233,195 @@ scrape_configs:
         regex: nfs-gaze
       - source_labels: [__meta_kubernetes_pod_ip]
         target_label: __address__
-        replacement: ${1}:9090
+        replacement: ${1}:9100
 ```
 
 ## Example Queries
 
-### Basic Queries
+### Per-operation IOPS
 
 ```promql
-# Current IOPS rate (operations per second)
-rate(nfs_operations_total[1m])
+sum by (operation) (rate(nfs_operations_total[1m]))
+```
 
-# Average operation latency over last 5 minutes
-rate(nfs_operation_duration_seconds_sum[5m]) / rate(nfs_operation_duration_seconds_count[5m])
+### Average RTT per operation
 
-# 95th percentile latency
-histogram_quantile(0.95, rate(nfs_operation_duration_seconds_bucket[5m]))
+```promql
+sum by (operation) (rate(nfs_operation_duration_seconds_sum[5m]))
+  /
+sum by (operation) (rate(nfs_operation_duration_seconds_count[5m]))
+```
 
-# Error rate percentage
-100 * rate(nfs_operation_errors_total[5m]) / rate(nfs_operations_total[5m])
+### p95 latency per mount and operation
 
-# Throughput in MB/s
-rate(nfs_operation_bytes_total[1m]) / 1024 / 1024
+```promql
+histogram_quantile(
+  0.95,
+  sum by (mount_point, operation, le) (
+    rate(nfs_operation_duration_seconds_bucket[5m])
+  )
+)
+```
 
-# Mount uptime in hours
+### Error rate (%) per operation
+
+```promql
+100
+* sum by (operation) (rate(nfs_operation_errors_total[5m]))
+/ sum by (operation) (rate(nfs_operations_total[5m]))
+```
+
+### Throughput in MiB/s per mount
+
+```promql
+sum by (mount_point) (rate(nfs_operation_bytes_total[1m])) / 1024 / 1024
+```
+
+### VFS open vs. lookup ratio (cache effectiveness proxy)
+
+```promql
+rate(nfs_vfs_lookup_total[5m]) / rate(nfs_vfs_open_total[5m])
+```
+
+### Mount uptime in hours
+
+```promql
 nfs_mount_age_seconds / 3600
 ```
 
-### Advanced Queries
+## Grafana panel ideas
 
-```promql
-# Detect latency spikes (when p95 > 100ms)
-histogram_quantile(0.95, rate(nfs_operation_duration_seconds_bucket[1m])) > 0.1
-
-# Calculate read vs write ratio (requires separate read/write byte counters)
-rate(nfs_mount_bytes_read_total[5m]) / (rate(nfs_mount_bytes_read_total[5m]) + rate(nfs_mount_bytes_written_total[5m]))
-
-# Alert on high error rate (> 1%)
-100 * rate(nfs_operation_errors_total[5m]) / rate(nfs_operations_total[5m]) > 1
-```
-
-## Grafana Dashboard
-
-### Panel Examples
-
-1. **IOPS Panel**
-   - Query: `rate(nfs_operations_total[1m])`
-   - Visualization: Graph
-   - Unit: ops/sec
-
-2. **Latency Distribution**
-   - Queries:
-     - p50: `histogram_quantile(0.5, rate(nfs_operation_duration_seconds_bucket[5m]))`
-     - p95: `histogram_quantile(0.95, rate(nfs_operation_duration_seconds_bucket[5m]))`
-     - p99: `histogram_quantile(0.99, rate(nfs_operation_duration_seconds_bucket[5m]))`
-   - Visualization: Graph
-   - Unit: seconds
-
-3. **Throughput**
-   - Query: `rate(nfs_operation_bytes_total[1m])`
-   - Visualization: Graph
-   - Unit: bytes/sec (with SI prefix)
-
-4. **Error Rate**
-   - Query: `rate(nfs_operation_errors_total[5m])`
-   - Visualization: Stat
-   - Unit: errors/sec
-
-5. **Mount Age**
-   - Query: `nfs_mount_age_seconds`
-   - Visualization: Stat
-   - Unit: seconds (duration)
+1. **IOPS by operation** — `sum by (operation) (rate(nfs_operations_total[1m]))`
+2. **Latency p50/p95/p99** — `histogram_quantile(0.5|0.95|0.99, sum by (operation, le) (rate(nfs_operation_duration_seconds_bucket[5m])))`
+3. **Throughput by mount** — `sum by (mount_point) (rate(nfs_operation_bytes_total[1m]))`, unit `bytes/sec` with SI prefix
+4. **Error & timeout rates** — `sum by (operation) (rate(nfs_operation_errors_total[5m]))` and `…_timeouts_total`
+5. **Mount age** — `nfs_mount_age_seconds`, displayed as a duration
 
 ## Alerting Rules
-
-Example Prometheus alerting rules:
 
 ```yaml
 groups:
   - name: nfs_alerts
     rules:
       - alert: HighNFSLatency
-        expr: histogram_quantile(0.95, rate(nfs_operation_duration_seconds_bucket[5m])) > 0.1
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (mount_point, operation, le) (
+              rate(nfs_operation_duration_seconds_bucket[5m])
+            )
+          ) > 0.1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High NFS operation latency detected"
-          description: "95th percentile NFS latency is {{ $value }}s (threshold: 0.1s)"
+          summary: "High NFS p95 latency on {{ $labels.mount_point }} ({{ $labels.operation }})"
+          description: "p95 latency is {{ $value }}s (threshold 0.1s)"
 
-      - alert: NFSErrors
-        expr: rate(nfs_operation_errors_total[5m]) > 10
+      - alert: NFSErrorsRising
+        expr: |
+          sum by (mount_point, operation) (
+            rate(nfs_operation_errors_total[5m])
+          ) > 1
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "High NFS error rate"
-          description: "NFS error rate is {{ $value }} errors/sec"
+          summary: "NFS errors on {{ $labels.mount_point }} ({{ $labels.operation }})"
+          description: "Error rate {{ $value }}/s"
 
       - alert: NFSTimeouts
-        expr: rate(nfs_operation_timeouts_total[5m]) > 1
+        expr: |
+          sum by (mount_point) (
+            rate(nfs_operation_timeouts_total[5m])
+          ) > 1
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "NFS operations timing out"
-          description: "NFS timeout rate is {{ $value }} timeouts/sec"
+          summary: "NFS retransmits on {{ $labels.mount_point }}"
+          description: "{{ $value }} timeouts/sec — check network/server"
+
+      - alert: NFSMountRecycled
+        expr: nfs_mount_age_seconds < 60
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "NFS mount {{ $labels.mount_point }} was recently re-mounted"
 ```
 
-## Testing the Metrics Endpoint
-
-### Manual Testing
+## Testing the endpoint
 
 ```bash
-# Check if metrics endpoint is working
-curl http://localhost:9090/metrics
+# Quick sanity check
+curl -s http://127.0.0.1:9100/metrics | head -40
 
-# Check health endpoint
-curl http://localhost:9090/health
+# Filter for one metric family
+curl -s http://127.0.0.1:9100/metrics | grep '^nfs_operations_total'
 
-# Get metrics in a loop for testing
-while true; do
-  curl -s http://localhost:9090/metrics | grep nfs_operations_total
-  sleep 5
-done
+# Liveness
+curl -i http://127.0.0.1:9100/health
 ```
 
-### Using promtool
+If you have `promtool` installed:
 
 ```bash
-# Validate metrics format
-curl -s http://localhost:9090/metrics | promtool check metrics
-
-# Test queries locally
-promtool query instant http://localhost:9090 'rate(nfs_operations_total[1m])'
+curl -s http://127.0.0.1:9100/metrics | promtool check metrics
 ```
 
 ## Troubleshooting
 
-### Common Issues
+1. **`Address already in use`** when starting the exporter
+   Another process owns the port. Pick a different one:
+   `--prometheus-port 9101`.
 
-1. **Port Already in Use**
-   - Error: `Address already in use`
-   - Solution: Use a different port with `--prometheus-port`
+2. **Prometheus can't reach the exporter from another host**
+   The default bind is `127.0.0.1`, which only accepts loopback
+   connections. Bind explicitly with
+   `--prometheus-bind 0.0.0.0` (or a specific NIC address).
 
-2. **No Metrics Appearing**
-   - Check that NFS operations are occurring
-   - Verify the mount point is correct with `-m /path/to/mount`
-   - Ensure the tool is running with `--prometheus` flag
+3. **Metrics endpoint is empty / counters never increase**
+   - Confirm there are NFS mounts in `/proc/self/mountstats`:
+     `grep -c '^device .* nfs' /proc/self/mountstats`
+   - Confirm activity is reaching them:
+     `mount -t nfs,nfs4 && ls /mnt/nfs`
+   - Counters only export non-zero deltas, so a totally idle mount
+     will appear blank.
 
-3. **Metrics Not Updating**
-   - Check the update interval (`-i` flag)
-   - Verify NFS mount is active: `mount | grep nfs`
-   - Check `/proc/self/mountstats` is accessible
+4. **Counter values look like they "reset"**
+   The underlying `/proc/self/mountstats` counters are zeroed on
+   remount or `umount`/`mount` cycles. When nfs-gaze sees any
+   monotonic counter for an operation move backwards between
+   samples, it treats that as a reset, **drops the reset sample
+   entirely**, and rebases against the post-reset values on the next
+   tick. The exporter is therefore safe across remounts (no negative
+   `inc_by` calls reach Prometheus), and `rate()` queries recover on
+   the next non-zero delta.
 
-### Debug Mode
+## Performance & Security
 
-Run with verbose output to see metric updates:
+- The exporter holds metrics in memory and serves them on demand;
+  scraping does not touch the disk.
+- The default bind address is `127.0.0.1`, so the endpoint is **not**
+  exposed off-host unless you opt in with `--prometheus-bind`.
+- There is no authentication on the HTTP endpoint. If you bind on a
+  routable address, place it behind a reverse proxy or restrict
+  access at the network layer.
+- Metrics contain only NFS performance data — no file paths beyond
+  the mount point and no payload content.
+- A reasonable starting point for `scrape_interval` is 15s; intervals
+  shorter than ~5s rarely produce meaningfully different rate values.
 
-```bash
-# This will show the NFS stats on console while also exposing metrics
-./nfs-gaze -m /mnt/nfs --prometheus --prometheus-port 9090 -i 2
-```
+## Adding new metrics
 
-## Performance Considerations
-
-- The metrics endpoint is lightweight and adds minimal overhead
-- Each scrape reads current in-memory metrics (no disk I/O)
-- Recommended scrape interval: 15-30 seconds
-- Lower intervals (< 5s) may not show meaningful changes due to metric granularity
-
-## Security Notes
-
-- The metrics endpoint binds to `0.0.0.0` by default (all interfaces)
-- No authentication is implemented - use network security if needed
-- Consider running behind a reverse proxy for production deployments
-- Metrics do not contain sensitive data (only performance statistics)
-
-## Integration with Other Tools
-
-### Prometheus Pushgateway
-
-For short-lived monitoring sessions:
-
-```bash
-# Run nfs-gaze and push metrics to pushgateway
-nfs-gaze -m /mnt/nfs --prometheus --prometheus-port 9090 &
-sleep 10
-curl -s http://localhost:9090/metrics | curl --data-binary @- http://pushgateway:9091/metrics/job/nfs-gaze
-```
-
-### Node Exporter Integration
-
-While node_exporter provides basic NFS metrics, nfs-gaze offers:
-- More detailed operation-level statistics
-- Real-time latency histograms
-- Per-operation error tracking
-- VFS event monitoring
-
-Both can be used together for comprehensive monitoring.
-
-## Future Enhancements
-
-Potential improvements for the Prometheus integration:
-
-1. **Per-operation labels** - Separate metrics for READ, WRITE, GETATTR, etc.
-2. **Mount point labels** - Support multiple mounts with labels
-3. **Custom histogram buckets** - Configurable latency buckets
-4. **Metric cardinality controls** - Options to limit label combinations
-5. **Recording rules** - Pre-computed metrics for common queries
-
-## Contributing
-
-To add new metrics:
-
-1. Define the metric in `src/metrics.rs` PrometheusExporter struct
-2. Register it in the `new()` method
-3. Update it in the `export_nfs_operation_metrics()` method
-4. Add documentation to this file
+1. Define the field on `PrometheusExporter` in `src/metrics.rs`.
+2. Construct it in `PrometheusExporter::new()` and `register` it.
+3. Update it inside the relevant `export_*` method on the
+   `MetricsExporter` impl.
+4. Add an entry to the **Metrics Reference** section above and a
+   regression test in `tests/metrics_test.rs`.
 
 ## License
 
-See the main project LICENSE file.
+See the project [LICENSE](LICENSE) file.

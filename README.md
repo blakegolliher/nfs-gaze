@@ -11,7 +11,7 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 - **Clear Output Format**: Detailed performance metrics in an easy-to-read display
 - **Memory Safe**: Built with Rust for zero memory leaks and thread safety
 - **High Performance**: Optimized for minimal overhead monitoring
-- **Observability Ready**: Optional Prometheus and OpenTelemetry metrics export
+- **Observability Ready**: Optional Prometheus metrics export
 
 ## Why nfs-gaze?
 
@@ -27,7 +27,6 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 | Easy setup | Yes | Yes | No |
 | RTT/latency per op type | Yes | No | Yes |
 | Prometheus metrics | Yes | No | No |
-| OpenTelemetry support | Yes | No | No |
 
 *Reading /proc/self/mountstats requires the process to have access to its own mount namespace
 
@@ -108,9 +107,6 @@ Focus on metadata operations that often cause application slowdowns:
 ```bash
 # Monitor only metadata operations
 ./nfs-gaze -m /mnt/nfs --ops GETATTR,LOOKUP,ACCESS,READDIR
-
-# Track attribute cache effectiveness
-./nfs-gaze -m /mnt/nfs --ops GETATTR --attr
 ```
 
 ### Monitor Write Latency Spikes
@@ -170,10 +166,18 @@ Use during benchmarks to understand NFS behavior:
 | | `--ops` | | Comma-separated list of operations to monitor |
 | `-i` | `--interval` | 1 | Update interval in seconds |
 | `-c` | `--count` | 0 | Number of iterations (0 = infinite) |
-| | `--attr` | false | Show attribute cache statistics |
 | | `--bw` | false | Show bandwidth statistics |
 | | `--clear` | false | Clear screen between iterations |
 | `-f` | `--mountstats-path` | /proc/self/mountstats | Path to mountstats file |
+| | `--metrics-interval` | 10 | Metrics export interval in seconds |
+
+When built with the `prometheus` feature, the following flags are also available:
+
+| Long Form | Default | Description |
+|-----------|---------|-------------|
+| `--prometheus` | false | Enable Prometheus metrics export |
+| `--prometheus-bind` | 127.0.0.1 | Address the Prometheus HTTP server binds to |
+| `--prometheus-port` | 9100 | Port the Prometheus HTTP server listens on |
 
 ### Supported NFS Operations
 
@@ -283,41 +287,22 @@ cargo build --release --target aarch64-unknown-linux-gnu
 
 ## Observability Integration
 
-nfs-gaze supports exporting metrics to modern observability platforms through optional feature flags:
+nfs-gaze can export metrics to Prometheus through an optional feature flag.
 
 ### Prometheus Integration
 
 ```bash
 # Build with Prometheus support
-cargo build --features prometheus
+cargo build --release --features prometheus
 
-# Enable Prometheus metrics export
-./nfs-gaze --prometheus --prometheus-port 9090
+# Enable Prometheus metrics export (default bind 127.0.0.1, port 9100)
+./nfs-gaze --prometheus
+
+# Bind to all interfaces on a custom port
+./nfs-gaze --prometheus --prometheus-bind 0.0.0.0 --prometheus-port 9100
 
 # Scrape metrics
-curl http://localhost:9090/metrics
-```
-
-### OpenTelemetry Integration
-
-```bash
-# Build with OpenTelemetry support
-cargo build --features opentelemetry
-
-# Export to OTEL collector
-./nfs-gaze --opentelemetry --otel-endpoint http://collector:4317
-```
-
-### Combined Observability
-
-```bash
-# Build with both integrations
-cargo build --features observability
-
-# Enable both Prometheus and OpenTelemetry
-./nfs-gaze --prometheus --opentelemetry \
-           --prometheus-port 9090 \
-           --otel-endpoint http://collector:4317
+curl http://127.0.0.1:9100/metrics
 ```
 
 ### Available Metrics
@@ -327,10 +312,8 @@ cargo build --features observability
 - **Mount Point Metrics**: Per-mount statistics and health
 - **Rich Labels**: Mount point, server, operation type context
 
-For detailed setup instructions, see [OBSERVABILITY.md](OBSERVABILITY.md). Example configurations are available in the `examples/` directory:
-
-- `examples/prometheus.yml` - Prometheus scraping configuration
-- `examples/otel-collector.yml` - OpenTelemetry collector setup
+For detailed setup instructions, see [OBSERVABILITY.md](OBSERVABILITY.md). An example
+Prometheus scraping configuration is available at `examples/prometheus.yml`.
 
 ## Testing
 
