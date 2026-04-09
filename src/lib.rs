@@ -33,6 +33,7 @@
 //! behavior there.
 
 pub mod cli;
+pub mod compare;
 pub mod display;
 pub mod metrics;
 pub mod monitor;

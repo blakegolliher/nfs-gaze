@@ -30,12 +30,7 @@ async fn run_linux() -> anyhow::Result<()> {
 #[cfg(target_os = "linux")]
 fn dispatch_command(cmd: nfs_gaze::cli::Command) -> anyhow::Result<()> {
     match cmd {
-        nfs_gaze::cli::Command::Compare(_args) => {
-            // The compare subcommand is scaffolded here so the CLI
-            // structure is stable, but the body lands in a follow-up
-            // commit to keep the diff reviewable.
-            anyhow::bail!("compare subcommand is not yet implemented")
-        }
+        nfs_gaze::cli::Command::Compare(args) => nfs_gaze::compare::run(args),
     }
 }
 
