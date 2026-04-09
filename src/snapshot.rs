@@ -736,7 +736,10 @@ mod tests {
         agg.record_xprt(&bogus);
 
         let report = agg.finalise(10, None);
-        let xprt = report.xprt.as_ref().expect("first sample seeds the accumulator");
+        let xprt = report
+            .xprt
+            .as_ref()
+            .expect("first sample seeds the accumulator");
         assert_eq!(xprt.protocol, "tcp");
         // Only the first sample's numbers should have landed.
         assert_eq!(xprt.sends, 1000);

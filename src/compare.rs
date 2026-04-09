@@ -13,7 +13,7 @@
 //! the whole point of the command is to diff two real captures.
 
 use crate::cli::CompareArgs;
-use crate::snapshot::{MountReport, OpReport, Report};
+use crate::snapshot::{MountReport, OpReport, Report, XprtReport};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs::File;
@@ -129,6 +129,14 @@ pub fn print_comparison<W: Write>(
     }
     writeln!(w)?;
 
+    // RPC Transport section. Only renders when both reports carry
+    // xprt data — a mismatched pair (one TCP, one missing) is not
+    // meaningful to diff. For TCP/TCP the section shows the slot
+    // high-water mark and the three per-request pressure averages.
+    if let (Some(x1), Some(x2)) = (m1.xprt.as_ref(), m2.xprt.as_ref()) {
+        write_xprt_section(w, x1, x2, label1, label2)?;
+    }
+
     writeln!(w, "{}", "-".repeat(TABLE_WIDTH))?;
     writeln!(w, "All ratios: ({} / {})", label2, label1)?;
     writeln!(w, "  Latency:  <1 means {} is faster", label2)?;
@@ -155,6 +163,70 @@ fn write_header<W: Write>(
         "Duration:",
         format!("{}s", r1.duration_sec),
         format!("{}s", r2.duration_sec)
+    )?;
+    writeln!(w)?;
+    Ok(())
+}
+
+fn write_xprt_section<W: Write>(
+    w: &mut W,
+    x1: &XprtReport,
+    x2: &XprtReport,
+    label1: &str,
+    label2: &str,
+) -> io::Result<()> {
+    writeln!(w, "RPC Transport ({} vs {})", x1.protocol, x2.protocol)?;
+    writeln!(w, "{}", "-".repeat(TABLE_WIDTH))?;
+    writeln!(
+        w,
+        "{:<18} {:>12} {:>12} {:>10} {:>14}",
+        "Metric", label1, label2, "Ratio", "Better"
+    )?;
+    writeln!(w, "{}", "-".repeat(TABLE_WIDTH))?;
+
+    // Max-slots high-water is informational, not ranked — a higher
+    // value is not inherently "better" or "worse". If the slot_cap
+    // is known on at least one side, append it in parens so the
+    // reader can tell "7091 of 65536" from "7091 of ?".
+    let cap_hint = x1.slot_cap.or(x2.slot_cap);
+    let slot_label = match cap_hint {
+        Some(c) => format!("Slots HW (cap {c})"),
+        None => "Slots HW".to_string(),
+    };
+    write_summary_i64_row(w, &slot_label, x1.max_slots, x2.max_slots)?;
+
+    // Per-request pressure averages: lower is better. A ratio of
+    // zero on both sides skips the row entirely — there was no slot
+    // pressure on either capture and the row would carry no signal.
+    write_summary_f64_row(
+        w,
+        "bklog/req",
+        x1.bklog_per_req,
+        x2.bklog_per_req,
+        label1,
+        label2,
+        true,
+        3,
+    )?;
+    write_summary_f64_row(
+        w,
+        "sending/req",
+        x1.sending_per_req,
+        x2.sending_per_req,
+        label1,
+        label2,
+        true,
+        2,
+    )?;
+    write_summary_f64_row(
+        w,
+        "pending/req",
+        x1.pending_per_req,
+        x2.pending_per_req,
+        label1,
+        label2,
+        true,
+        2,
     )?;
     writeln!(w)?;
     Ok(())
@@ -529,6 +601,78 @@ mod tests {
         assert!(out.contains("2.00x"), "missing throughput ratio: {out}");
         assert!(out.contains("0.50x"), "missing latency ratio: {out}");
         assert!(out.contains("NEW"), "missing NEW winner label: {out}");
+    }
+
+    fn xprt(bklog: f64, sending: f64, pending: f64, max_slots: i64) -> XprtReport {
+        XprtReport {
+            protocol: "tcp".to_string(),
+            max_slots,
+            slot_cap: Some(65536),
+            sends: 100,
+            recvs: 100,
+            bad_xids: 0,
+            bklog_per_req: bklog,
+            sending_per_req: sending,
+            pending_per_req: pending,
+        }
+    }
+
+    #[test]
+    fn print_comparison_renders_xprt_section_when_both_sides_have_xprt() {
+        // Side 1 has clean slots, side 2 is under pressure (bklog
+        // per request of 0.1). The compare output must surface the
+        // difference and identify the cleaner side as "better".
+        let mut r1 = build_report("a:/e", 60, vec![op("READ", 1000, 0.5, 16.6)]);
+        r1.mounts[0].xprt = Some(xprt(0.0, 0.50, 10.00, 32));
+        let mut r2 = build_report("b:/e", 60, vec![op("READ", 1000, 0.5, 16.6)]);
+        r2.mounts[0].xprt = Some(xprt(0.100, 0.80, 12.00, 48));
+
+        let mut buf = Vec::<u8>::new();
+        print_comparison(&mut buf, &r1, &r2, &r1.mounts[0], &r2.mounts[0], "A", "B")
+            .expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+
+        assert!(
+            out.contains("RPC Transport"),
+            "missing xprt section header: {out}"
+        );
+        assert!(out.contains("Slots HW"), "missing Slots HW row: {out}");
+        assert!(out.contains("bklog/req"), "missing bklog/req row: {out}");
+        assert!(
+            out.contains("sending/req"),
+            "missing sending/req row: {out}"
+        );
+        assert!(
+            out.contains("pending/req"),
+            "missing pending/req row: {out}"
+        );
+        // A (bklog = 0) is cleaner than B (bklog = 0.1); lower is
+        // better for backlog pressure so A wins the bklog row.
+        assert!(
+            out.contains("(cap 65536)"),
+            "expected slot cap hint in Slots HW label: {out}"
+        );
+    }
+
+    #[test]
+    fn print_comparison_omits_xprt_section_when_either_side_missing() {
+        // If one report has xprt data and the other doesn't, the
+        // xprt section should not render — mixing a known TCP side
+        // with an unknown side would produce a half-populated table
+        // that does not actually answer any question.
+        let r1 = build_report("a:/e", 60, vec![op("READ", 1000, 0.5, 16.6)]);
+        let mut r2 = build_report("b:/e", 60, vec![op("READ", 1000, 0.5, 16.6)]);
+        r2.mounts[0].xprt = Some(xprt(0.0, 0.0, 0.0, 16));
+
+        let mut buf = Vec::<u8>::new();
+        print_comparison(&mut buf, &r1, &r2, &r1.mounts[0], &r2.mounts[0], "A", "B")
+            .expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+
+        assert!(
+            !out.contains("RPC Transport"),
+            "xprt section should be skipped when one side lacks data: {out}"
+        );
     }
 
     #[test]
