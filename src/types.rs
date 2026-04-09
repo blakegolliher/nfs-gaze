@@ -91,6 +91,7 @@ pub struct DeltaStats {
     pub delta_queue: i64,
     pub delta_errors: i64,
     pub delta_retrans: i64,
+    pub delta_timeouts: i64,
     pub avg_rtt: f64,
     pub avg_exec: f64,
     pub avg_queue: f64,

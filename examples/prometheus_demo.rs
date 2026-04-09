@@ -39,6 +39,7 @@ fn main() {
                     delta_queue: 100,
                     delta_errors: 2,
                     delta_retrans: 1,
+                    delta_timeouts: 0,
                     avg_rtt: 5.0,
                     avg_exec: 8.0,
                     avg_queue: 1.0,

@@ -46,6 +46,7 @@ pub struct PrometheusExporter {
     nfs_operation_bytes_total: CounterVec,
     nfs_operation_errors_total: CounterVec,
     nfs_operation_timeouts_total: CounterVec,
+    nfs_operation_retransmissions_total: CounterVec,
 
     // VFS Event metrics - separate counters for each event type
     nfs_vfs_open_total: CounterVec,
@@ -113,6 +114,14 @@ impl PrometheusExporter {
             Opts::new(
                 "nfs_operation_timeouts_total",
                 "Total number of NFS operation timeouts",
+            ),
+            operation_labels,
+        )?;
+
+        let nfs_operation_retransmissions_total = CounterVec::new(
+            Opts::new(
+                "nfs_operation_retransmissions_total",
+                "Total number of NFS operation retransmissions (ntrans - ops)",
             ),
             operation_labels,
         )?;
@@ -203,6 +212,7 @@ impl PrometheusExporter {
         registry.register(Box::new(nfs_operation_bytes_total.clone()))?;
         registry.register(Box::new(nfs_operation_errors_total.clone()))?;
         registry.register(Box::new(nfs_operation_timeouts_total.clone()))?;
+        registry.register(Box::new(nfs_operation_retransmissions_total.clone()))?;
 
         // Register VFS event metrics
         registry.register(Box::new(nfs_vfs_open_total.clone()))?;
@@ -227,6 +237,7 @@ impl PrometheusExporter {
             nfs_operation_bytes_total,
             nfs_operation_errors_total,
             nfs_operation_timeouts_total,
+            nfs_operation_retransmissions_total,
             nfs_vfs_open_total,
             nfs_vfs_lookup_total,
             nfs_vfs_access_total,
@@ -357,8 +368,15 @@ impl MetricsExporter for PrometheusExporter {
             }
 
             // Add timeouts
-            if stat.delta_retrans > 0 {
+            if stat.delta_timeouts > 0 {
                 self.nfs_operation_timeouts_total
+                    .with_label_values(labels)
+                    .inc_by(stat.delta_timeouts as f64);
+            }
+
+            // Add retransmissions
+            if stat.delta_retrans > 0 {
+                self.nfs_operation_retransmissions_total
                     .with_label_values(labels)
                     .inc_by(stat.delta_retrans as f64);
             }
@@ -594,6 +612,7 @@ mod tests {
             delta_queue: 50,
             delta_errors: 1,
             delta_retrans: 2,
+            delta_timeouts: 3,
             avg_rtt: 10.0,
             avg_exec: 20.0,
             avg_queue: 5.0,

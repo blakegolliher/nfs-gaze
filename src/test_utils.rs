@@ -149,6 +149,7 @@ pub fn create_test_delta_stat(operation: &str, delta_ops: i64, delta_bytes: i64)
         delta_queue: delta_ops * 5,
         delta_errors: 0,
         delta_retrans: 0,
+        delta_timeouts: 0,
         avg_rtt: 10.0,
         avg_exec: 20.0,
         avg_queue: 5.0,

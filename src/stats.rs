@@ -74,6 +74,7 @@ fn calculate_operation_delta(
     // sample entirely; the next one will rebase against the
     // post-reset values.
     if current.ops < previous.ops
+        || current.ntrans < previous.ntrans
         || current.bytes_sent < previous.bytes_sent
         || current.bytes_recv < previous.bytes_recv
         || current.rtt < previous.rtt
@@ -86,6 +87,7 @@ fn calculate_operation_delta(
     }
 
     let delta_ops = current.ops - previous.ops;
+    let delta_ntrans = current.ntrans - previous.ntrans;
     let delta_sent = current.bytes_sent - previous.bytes_sent;
     let delta_recv = current.bytes_recv - previous.bytes_recv;
     let delta_bytes = delta_sent + delta_recv;
@@ -93,7 +95,12 @@ fn calculate_operation_delta(
     let delta_exec = current.execute_time - previous.execute_time;
     let delta_queue = current.queue_time - previous.queue_time;
     let delta_errors = current.errors - previous.errors;
-    let delta_retrans = current.timeouts - previous.timeouts;
+    let delta_timeouts = current.timeouts - previous.timeouts;
+    // Retransmissions are transmissions beyond the initial one per op:
+    // ntrans counts every RPC send (initial + retries), ops counts
+    // unique completed operations. Clamp to zero defensively; in real
+    // data delta_ntrans >= delta_ops always.
+    let delta_retrans = (delta_ntrans - delta_ops).max(0);
 
     let ops_f = delta_ops as f64;
     let iops = safe_div(ops_f, elapsed_seconds);
@@ -115,6 +122,7 @@ fn calculate_operation_delta(
         delta_queue,
         delta_errors,
         delta_retrans,
+        delta_timeouts,
         avg_rtt,
         avg_exec,
         avg_queue,
@@ -268,6 +276,7 @@ mod tests {
                 delta_queue: 0,
                 delta_errors: 0,
                 delta_retrans: 0,
+                delta_timeouts: 0,
                 avg_rtt: 0.0,
                 avg_exec: 0.0,
                 avg_queue: 0.0,
@@ -286,6 +295,7 @@ mod tests {
                 delta_queue: 0,
                 delta_errors: 0,
                 delta_retrans: 0,
+                delta_timeouts: 0,
                 avg_rtt: 0.0,
                 avg_exec: 0.0,
                 avg_queue: 0.0,
@@ -357,5 +367,59 @@ mod tests {
         assert_eq!(delta.iops, 0.0);
         assert_eq!(delta.kb_per_sec, 0.0);
         assert!(delta.avg_rtt > 0.0);
+    }
+
+    #[test]
+    fn test_delta_retrans_is_ntrans_minus_ops_not_timeouts() {
+        // Retransmissions must be derived from ntrans minus ops, not
+        // from timeouts. ntrans counts every RPC send (initial plus
+        // retries); ops counts unique completed operations; timeouts
+        // is an independent counter. Conflating retrans with timeouts
+        // was the original bug.
+        let previous = NFSOperation {
+            name: "READ".to_string(),
+            ops: 50,
+            ntrans: 52,
+            timeouts: 1,
+            bytes_sent: 0,
+            bytes_recv: 0,
+            queue_time: 0,
+            rtt: 0,
+            execute_time: 0,
+            errors: 0,
+        };
+        let current = NFSOperation {
+            name: "READ".to_string(),
+            ops: 100,
+            ntrans: 105,
+            timeouts: 2,
+            bytes_sent: 0,
+            bytes_recv: 0,
+            queue_time: 0,
+            rtt: 0,
+            execute_time: 0,
+            errors: 0,
+        };
+
+        let mut prev_ops = HashMap::new();
+        prev_ops.insert("READ".to_string(), previous);
+        let mut curr_ops = HashMap::new();
+        curr_ops.insert("READ".to_string(), current);
+
+        let previous_mount = create_test_mount_with_operations(prev_ops);
+        let current_mount = create_test_mount_with_operations(curr_ops);
+
+        let deltas = calculate_delta_stats(&previous_mount, &current_mount, 1.0);
+        assert_eq!(deltas.len(), 1);
+        let delta = &deltas[0];
+
+        // delta_ntrans (53) - delta_ops (50) = 3 retransmissions.
+        assert_eq!(
+            delta.delta_retrans, 3,
+            "retrans should be delta_ntrans - delta_ops"
+        );
+        // delta_timeouts is reported separately and must not be
+        // conflated with retransmissions.
+        assert_eq!(delta.delta_timeouts, 1);
     }
 }
