@@ -27,7 +27,14 @@ pub struct MonitorConfig<'a> {
     pub monitor_mounts: Vec<NFSMount>,
     pub operations_filter: HashSet<String>,
     pub interval: Duration,
+    /// Maximum iteration count (0 = unlimited). Mutually exclusive with
+    /// `duration` at the CLI layer; this struct only enforces that the
+    /// first limit to trip wins.
     pub count: usize,
+    /// Optional wall-clock termination. `None` means "no time limit".
+    /// When `Some`, the loop exits once `Instant::now()` crosses the
+    /// start instant plus this `Duration`.
+    pub duration: Option<Duration>,
     pub show_bandwidth: bool,
     pub clear_screen: bool,
     pub metrics_manager: Option<&'a crate::metrics::MetricsManager>,
@@ -114,6 +121,7 @@ impl Monitor {
             operations_filter,
             interval,
             count,
+            duration,
             show_bandwidth,
             clear_screen,
             metrics_manager,
@@ -125,13 +133,28 @@ impl Monitor {
             .collect();
 
         let mut iteration = 0;
-        let mut last_update = Instant::now();
+        let loop_start = Instant::now();
+        let mut last_update = loop_start;
+        // Compute the wall-clock deadline once at the start of the loop
+        // so the total session length is independent of how long each
+        // iteration takes. Note that the deadline is checked *before*
+        // sleeping for the next interval, so the loop may overshoot by
+        // up to one `interval` when `duration` and `interval` are not
+        // commensurate — matching the original nfs-monitor semantics.
+        let deadline = duration.map(|d| loop_start + d);
         let mut consecutive_parse_failures: u32 = 0;
 
         while self.running.load(Ordering::SeqCst) {
             // Check if we've reached the iteration limit
             if count > 0 && iteration >= count {
                 break;
+            }
+
+            // Check if we've reached the wall-clock deadline
+            if let Some(end) = deadline {
+                if Instant::now() >= end {
+                    break;
+                }
             }
 
             // Sleep for the specified interval
@@ -317,6 +340,7 @@ mod tests {
                 // count=0 means "infinite iterations"; we rely on the
                 // breaker to terminate, not the count limit.
                 count: 0,
+                duration: None,
                 show_bandwidth: false,
                 clear_screen: false,
                 metrics_manager: None,
@@ -332,6 +356,57 @@ mod tests {
         assert!(
             msg.contains(&MAX_CONSECUTIVE_PARSE_FAILURES.to_string()),
             "error should mention the failure threshold: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_monitoring_loop_respects_duration() {
+        use tempfile::NamedTempFile;
+
+        // A valid-but-empty mountstats file keeps the parser happy so
+        // the circuit breaker does not trip; we rely on the wall-clock
+        // deadline to terminate the loop. NamedTempFile already creates
+        // the file on disk, so we do not need to write to it.
+        let tmp = NamedTempFile::new().expect("create tempfile");
+        let path = tmp
+            .path()
+            .to_str()
+            .expect("tempfile path is valid utf-8")
+            .to_string();
+
+        let target = Duration::from_millis(80);
+        let slack = Duration::from_millis(400);
+
+        let monitor = Monitor::new();
+        let start = Instant::now();
+        let result = monitor.monitoring_loop(
+            &mut Vec::<u8>::new(),
+            MonitorConfig {
+                mountstats_path: &path,
+                monitor_mounts: vec![],
+                operations_filter: HashSet::new(),
+                interval: Duration::from_millis(20),
+                count: 0,
+                duration: Some(target),
+                show_bandwidth: false,
+                clear_screen: false,
+                metrics_manager: None,
+            },
+        );
+        let elapsed = start.elapsed();
+
+        result.expect("loop should exit cleanly when duration elapses");
+        assert!(
+            elapsed >= target,
+            "loop exited before the deadline: {:?} < {:?}",
+            elapsed,
+            target
+        );
+        assert!(
+            elapsed < target + slack,
+            "loop ran far longer than its deadline: {:?} vs target {:?}",
+            elapsed,
+            target
         );
     }
 

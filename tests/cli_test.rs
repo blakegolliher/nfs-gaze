@@ -9,9 +9,32 @@ fn test_cli_default_flags() {
     assert_eq!(args.operations, None);
     assert_eq!(args.interval, 1);
     assert_eq!(args.count, 0);
+    assert_eq!(args.duration, None);
     assert!(!args.show_bandwidth);
     assert!(!args.clear_screen);
     assert_eq!(args.mountstats_path, "/proc/self/mountstats");
+}
+
+#[test]
+fn test_cli_with_duration() {
+    let args =
+        Args::try_parse_from(["nfs-gaze", "-d", "30"]).expect("should accept duration in seconds");
+    assert_eq!(args.duration, Some(30));
+    assert_eq!(args.count, 0);
+}
+
+#[test]
+fn test_cli_duration_and_count_are_mutually_exclusive() {
+    // Passing both --count and --duration must be a clap error. The
+    // two limits would race otherwise, and we decided against
+    // "first-wins" ambiguity.
+    let err = Args::try_parse_from(["nfs-gaze", "-c", "5", "-d", "30"])
+        .expect_err("clap should reject -c with -d");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("cannot be used with") || rendered.contains("conflict"),
+        "unexpected clap error: {rendered}"
+    );
 }
 
 #[test]

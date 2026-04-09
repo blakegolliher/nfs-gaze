@@ -86,6 +86,7 @@ async fn run_linux() -> anyhow::Result<()> {
 
     // Convert interval from seconds to Duration
     let interval = Duration::from_secs(args.interval);
+    let duration = args.duration.map(Duration::from_secs);
 
     // Start monitoring loop
     monitor
@@ -97,6 +98,7 @@ async fn run_linux() -> anyhow::Result<()> {
                 operations_filter,
                 interval,
                 count: args.count,
+                duration,
                 show_bandwidth: args.show_bandwidth,
                 clear_screen: args.clear_screen,
                 metrics_manager: metrics_manager.as_ref(),

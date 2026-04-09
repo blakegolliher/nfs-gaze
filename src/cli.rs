@@ -41,6 +41,10 @@ pub struct Args {
     #[arg(short = 'c', long, default_value = "0")]
     pub count: usize,
 
+    /// Total capture duration in seconds (mutually exclusive with --count)
+    #[arg(short = 'd', long, conflicts_with = "count")]
+    pub duration: Option<u64>,
+
     /// Show bandwidth statistics
     #[arg(long = "bw")]
     pub show_bandwidth: bool,
