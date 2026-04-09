@@ -327,6 +327,9 @@ impl Monitor {
                         // blind during an -o session.
                         if let Some(manager) = metrics_manager {
                             manager.export_metrics(current_mount, &delta_stats);
+                            if let Some(ref x) = xprt_delta {
+                                manager.export_xprt(current_mount, x, slot_cap);
+                            }
                         }
                     }
                 }

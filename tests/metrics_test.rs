@@ -278,6 +278,67 @@ mod prometheus_tests {
         assert!(metrics_text.contains("nfs_operation_duration_seconds"));
     }
 
+    #[test]
+    fn test_prometheus_xprt_metrics_exported() {
+        use nfs_gaze::DeltaXprtStats;
+
+        let config = MetricsConfig {
+            enable_prometheus: true,
+            prometheus_port: 9094,
+            ..Default::default()
+        };
+
+        let manager = MetricsManager::new(config).expect("Failed to create metrics manager");
+        let mount = create_test_mount("server:/export", "/mnt/test");
+
+        // Craft a delta with non-zero counters and a non-zero HWM so
+        // the gauges get populated and the counters all fire their
+        // inc_by guards.
+        let delta = DeltaXprtStats {
+            protocol: "tcp".to_string(),
+            delta_sends: 1000,
+            delta_recvs: 1000,
+            delta_bad_xids: 2,
+            delta_req: 1000,
+            delta_bklog: 50,
+            delta_sending: 820,
+            delta_pending: 8398,
+            max_slots: 7091,
+            bklog_per_req: 0.05,
+            sending_per_req: 0.82,
+            pending_per_req: 8.398,
+        };
+
+        manager.export_xprt(&mount, &delta, Some(65536));
+
+        let text = manager
+            .get_prometheus_metrics()
+            .expect("metrics output should be available");
+
+        // Spot-check one counter and one gauge. Both carry the
+        // protocol label so we also confirm the label plumbing.
+        assert!(
+            text.contains("nfs_xprt_sends_total"),
+            "missing nfs_xprt_sends_total in metrics output"
+        );
+        assert!(
+            text.contains("nfs_xprt_max_slots"),
+            "missing nfs_xprt_max_slots gauge"
+        );
+        assert!(
+            text.contains("nfs_xprt_slot_cap"),
+            "missing nfs_xprt_slot_cap gauge"
+        );
+        assert!(
+            text.contains("nfs_xprt_backlog_total"),
+            "missing nfs_xprt_backlog_total counter"
+        );
+        assert!(
+            text.contains("protocol=\"tcp\""),
+            "missing protocol label on xprt metrics"
+        );
+    }
+
     #[tokio::test]
     async fn test_prometheus_server_start() {
         let config = MetricsConfig {

@@ -1,4 +1,4 @@
-use crate::types::{DeltaStats, NFSEvents, NFSMount};
+use crate::types::{DeltaStats, DeltaXprtStats, NFSEvents, NFSMount};
 use std::time::Duration;
 
 #[cfg(feature = "prometheus")]
@@ -12,6 +12,18 @@ pub trait MetricsExporter: Send + Sync {
     fn export_nfs_events_metrics(&self, mount: &NFSMount, events: &NFSEvents);
     fn export_mount_info_metrics(&self, mount: &NFSMount);
     fn get_metrics_output(&self) -> Option<String>;
+
+    /// Export RPC transport deltas for a mount. Defaulted to a
+    /// no-op so adding new exporter impls does not require
+    /// implementing this method up front — `PrometheusExporter`
+    /// overrides it with the real behaviour.
+    fn export_nfs_xprt_metrics(
+        &self,
+        _mount: &NFSMount,
+        _delta: &DeltaXprtStats,
+        _slot_cap: Option<i64>,
+    ) {
+    }
 }
 
 /// Configuration for metrics export
@@ -63,6 +75,18 @@ pub struct PrometheusExporter {
     nfs_mount_age_seconds: GaugeVec,
     nfs_mount_bytes_read_total: CounterVec,
     nfs_mount_bytes_written_total: CounterVec,
+
+    // RPC transport metrics with labels (mount_point, server, protocol).
+    // Counters hold session deltas (summed via inc_by each export);
+    // gauges hold the current high-water mark and the configured cap.
+    nfs_xprt_sends_total: CounterVec,
+    nfs_xprt_recvs_total: CounterVec,
+    nfs_xprt_bad_xids_total: CounterVec,
+    nfs_xprt_backlog_total: CounterVec,
+    nfs_xprt_sending_total: CounterVec,
+    nfs_xprt_pending_total: CounterVec,
+    nfs_xprt_max_slots: GaugeVec,
+    nfs_xprt_slot_cap: GaugeVec,
 }
 
 #[cfg(feature = "prometheus")]
@@ -73,6 +97,10 @@ impl PrometheusExporter {
         // Define label names for metrics
         let operation_labels = &["mount_point", "server", "operation"];
         let mount_labels = &["mount_point", "server"];
+        // xprt metrics include the transport protocol so a single
+        // Prometheus graph can show TCP and RDMA lines on the same
+        // mount if the server is ever reconfigured.
+        let xprt_labels = &["mount_point", "server", "protocol"];
 
         // Create NFS operation metrics with labels
         let nfs_operations_total = CounterVec::new(
@@ -206,6 +234,69 @@ impl PrometheusExporter {
             mount_labels,
         )?;
 
+        // RPC transport metrics. See the xprt line in
+        // /proc/self/mountstats for the underlying fields. The
+        // backlog/sending/pending counters are the slot-pressure
+        // signal — Prometheus users should alert on
+        // rate(nfs_xprt_backlog_total[5m]) > 0 and compare
+        // nfs_xprt_max_slots against nfs_xprt_slot_cap.
+        let nfs_xprt_sends_total = CounterVec::new(
+            Opts::new(
+                "nfs_xprt_sends_total",
+                "Total RPC requests sent on this transport",
+            ),
+            xprt_labels,
+        )?;
+        let nfs_xprt_recvs_total = CounterVec::new(
+            Opts::new(
+                "nfs_xprt_recvs_total",
+                "Total RPC replies received on this transport",
+            ),
+            xprt_labels,
+        )?;
+        let nfs_xprt_bad_xids_total = CounterVec::new(
+            Opts::new(
+                "nfs_xprt_bad_xids_total",
+                "Total RPC replies with an XID that did not match any outstanding request",
+            ),
+            xprt_labels,
+        )?;
+        let nfs_xprt_backlog_total = CounterVec::new(
+            Opts::new(
+                "nfs_xprt_backlog_total",
+                "Cumulative backlog queue length across RPC enqueues (slot-pressure smoking gun)",
+            ),
+            xprt_labels,
+        )?;
+        let nfs_xprt_sending_total = CounterVec::new(
+            Opts::new(
+                "nfs_xprt_sending_total",
+                "Cumulative 'sending' state dwell across RPCs on this transport",
+            ),
+            xprt_labels,
+        )?;
+        let nfs_xprt_pending_total = CounterVec::new(
+            Opts::new(
+                "nfs_xprt_pending_total",
+                "Cumulative 'pending' state dwell across RPCs on this transport",
+            ),
+            xprt_labels,
+        )?;
+        let nfs_xprt_max_slots = GaugeVec::new(
+            Opts::new(
+                "nfs_xprt_max_slots",
+                "High-water mark of slots actually used on this transport",
+            ),
+            xprt_labels,
+        )?;
+        let nfs_xprt_slot_cap = GaugeVec::new(
+            Opts::new(
+                "nfs_xprt_slot_cap",
+                "Configured cap from /proc/sys/sunrpc/tcp_max_slot_table_entries (0 when unknown)",
+            ),
+            xprt_labels,
+        )?;
+
         // Register metrics
         registry.register(Box::new(nfs_operations_total.clone()))?;
         registry.register(Box::new(nfs_operation_duration_seconds.clone()))?;
@@ -230,6 +321,16 @@ impl PrometheusExporter {
         registry.register(Box::new(nfs_mount_bytes_read_total.clone()))?;
         registry.register(Box::new(nfs_mount_bytes_written_total.clone()))?;
 
+        // Register xprt metrics
+        registry.register(Box::new(nfs_xprt_sends_total.clone()))?;
+        registry.register(Box::new(nfs_xprt_recvs_total.clone()))?;
+        registry.register(Box::new(nfs_xprt_bad_xids_total.clone()))?;
+        registry.register(Box::new(nfs_xprt_backlog_total.clone()))?;
+        registry.register(Box::new(nfs_xprt_sending_total.clone()))?;
+        registry.register(Box::new(nfs_xprt_pending_total.clone()))?;
+        registry.register(Box::new(nfs_xprt_max_slots.clone()))?;
+        registry.register(Box::new(nfs_xprt_slot_cap.clone()))?;
+
         Ok(Self {
             registry,
             nfs_operations_total,
@@ -250,6 +351,14 @@ impl PrometheusExporter {
             nfs_mount_age_seconds,
             nfs_mount_bytes_read_total,
             nfs_mount_bytes_written_total,
+            nfs_xprt_sends_total,
+            nfs_xprt_recvs_total,
+            nfs_xprt_bad_xids_total,
+            nfs_xprt_backlog_total,
+            nfs_xprt_sending_total,
+            nfs_xprt_pending_total,
+            nfs_xprt_max_slots,
+            nfs_xprt_slot_cap,
         })
     }
 
@@ -451,6 +560,68 @@ impl MetricsExporter for PrometheusExporter {
             .inc_by(mount.bytes_write as f64);
     }
 
+    fn export_nfs_xprt_metrics(
+        &self,
+        mount: &NFSMount,
+        delta: &DeltaXprtStats,
+        slot_cap: Option<i64>,
+    ) {
+        let labels = &[
+            mount.mount_point.as_str(),
+            mount.server.as_str(),
+            delta.protocol.as_str(),
+        ];
+
+        // Counters: each call adds this interval's delta, matching
+        // how the per-op counters are handled. Guarding each inc_by
+        // on > 0 saves a no-op call but more importantly avoids the
+        // occasional "inc_by negative" panic if a bug ever leaks a
+        // negative delta through.
+        if delta.delta_sends > 0 {
+            self.nfs_xprt_sends_total
+                .with_label_values(labels)
+                .inc_by(delta.delta_sends as f64);
+        }
+        if delta.delta_recvs > 0 {
+            self.nfs_xprt_recvs_total
+                .with_label_values(labels)
+                .inc_by(delta.delta_recvs as f64);
+        }
+        if delta.delta_bad_xids > 0 {
+            self.nfs_xprt_bad_xids_total
+                .with_label_values(labels)
+                .inc_by(delta.delta_bad_xids as f64);
+        }
+        if delta.delta_bklog > 0 {
+            self.nfs_xprt_backlog_total
+                .with_label_values(labels)
+                .inc_by(delta.delta_bklog as f64);
+        }
+        if delta.delta_sending > 0 {
+            self.nfs_xprt_sending_total
+                .with_label_values(labels)
+                .inc_by(delta.delta_sending as f64);
+        }
+        if delta.delta_pending > 0 {
+            self.nfs_xprt_pending_total
+                .with_label_values(labels)
+                .inc_by(delta.delta_pending as f64);
+        }
+
+        // Gauges: always set, even when the value has not changed,
+        // so a Prometheus scrape right after a fresh process start
+        // immediately sees the current HWM rather than a gap.
+        self.nfs_xprt_max_slots
+            .with_label_values(labels)
+            .set(delta.max_slots as f64);
+        // A None slot_cap is exposed as zero. A "real" cap of zero
+        // would be absurd (no slots at all) so the clash is harmless
+        // in practice, and 0-vs-non-zero is still distinguishable.
+        self.nfs_xprt_slot_cap
+            .with_label_values(labels)
+            .set(slot_cap.unwrap_or(0) as f64);
+    }
+
     fn get_metrics_output(&self) -> Option<String> {
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -535,6 +706,24 @@ impl MetricsManager {
         {
             // No-op when the prometheus feature is disabled.
             let _ = (mount, stats);
+        }
+    }
+
+    /// Export a single interval's xprt delta. Called separately
+    /// from [`Self::export_metrics`] because xprt data may be
+    /// `None` on a mount where per-op stats are still present
+    /// (UDP/RDMA, or a protocol the parser does not yet handle).
+    pub fn export_xprt(&self, mount: &NFSMount, delta: &DeltaXprtStats, slot_cap: Option<i64>) {
+        #[cfg(feature = "prometheus")]
+        {
+            for exporter in &self.exporters {
+                exporter.export_nfs_xprt_metrics(mount, delta, slot_cap);
+            }
+        }
+
+        #[cfg(not(feature = "prometheus"))]
+        {
+            let _ = (mount, delta, slot_cap);
         }
     }
 
