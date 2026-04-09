@@ -158,6 +158,44 @@ pub struct NFSMount {
     pub xprt: Option<XprtStats>,
 }
 
+/// Per-interval delta of the RPC transport statistics.
+///
+/// Cumulative counters are subtracted to yield the work that
+/// happened in the last sample interval, and the per-request
+/// averages are derived from those deltas rather than re-reading
+/// the cumulative values — otherwise a long-running session would
+/// have its averages dominated by ancient history.
+///
+/// The three `_per_req` fields are the signal most worth watching
+/// for slot pressure:
+///
+/// - `bklog_per_req > 0` means at least one request waited for a
+///   free slot in this interval. Anything above ~0 is worth
+///   investigating; sustained double-digit values indicate the
+///   client is slot-starved.
+/// - `sending_per_req` high + `pending_per_req` low means the
+///   socket is the bottleneck (consider `nconnect`).
+/// - `sending_per_req` low + `pending_per_req` high means the
+///   server or the network is the bottleneck, not the client.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeltaXprtStats {
+    pub protocol: String,
+    pub delta_sends: i64,
+    pub delta_recvs: i64,
+    pub delta_bad_xids: i64,
+    pub delta_req: i64,
+    pub delta_bklog: i64,
+    pub delta_sending: i64,
+    pub delta_pending: i64,
+    /// Current high-water mark for slots actually used. This is a
+    /// monotonic gauge — not a delta — and is carried forward so
+    /// callers can compare against the configured slot cap.
+    pub max_slots: i64,
+    pub bklog_per_req: f64,
+    pub sending_per_req: f64,
+    pub pending_per_req: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeltaStats {
     pub operation: String,

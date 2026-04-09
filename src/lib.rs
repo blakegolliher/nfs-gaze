@@ -45,7 +45,9 @@ pub mod types;
 #[cfg(test)]
 pub mod test_utils;
 
-pub use types::{DeltaStats, NFSEvents, NFSMount, NFSOperation, NfsGazeError, Result, XprtStats};
+pub use types::{
+    DeltaStats, DeltaXprtStats, NFSEvents, NFSMount, NFSOperation, NfsGazeError, Result, XprtStats,
+};
 
 // Re-export the parser entry points so library consumers don't need to know
 // the module layout.

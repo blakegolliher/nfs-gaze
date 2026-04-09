@@ -1,4 +1,4 @@
-use crate::types::{DeltaStats, NFSMount, NFSOperation};
+use crate::types::{DeltaStats, DeltaXprtStats, NFSMount, NFSOperation, XprtStats};
 
 fn safe_div(numerator: f64, denominator: f64) -> f64 {
     if denominator > 0.0 {
@@ -129,6 +129,76 @@ fn calculate_operation_delta(
         kb_per_op,
         kb_per_sec,
         iops,
+    })
+}
+
+/// Compute the per-interval xprt delta between two samples.
+///
+/// Returns `None` in three cases:
+///
+/// 1. Either side lacks an [`XprtStats`] — nothing to diff.
+/// 2. The protocol tag changed between samples — almost certainly a
+///    remount, safest to drop the interval rather than produce
+///    nonsensical deltas across different transport layouts.
+/// 3. Any cumulative counter moved backwards, indicating a kernel
+///    counter reset. Matches the behaviour of
+///    [`calculate_delta_stats`] for per-operation deltas so the two
+///    pipelines stay in sync.
+///
+/// `max_slots` is a high-water mark rather than a cumulative counter
+/// so it is carried forward rather than subtracted; in practice it
+/// only moves upward over the lifetime of a mount. We still check
+/// that it did not shrink as a defence against future kernel
+/// bookkeeping changes.
+pub fn calculate_xprt_delta(
+    previous: Option<&XprtStats>,
+    current: Option<&XprtStats>,
+) -> Option<DeltaXprtStats> {
+    let previous = previous?;
+    let current = current?;
+
+    if previous.protocol != current.protocol {
+        return None;
+    }
+
+    if current.sends < previous.sends
+        || current.recvs < previous.recvs
+        || current.bad_xids < previous.bad_xids
+        || current.req_u < previous.req_u
+        || current.bklog_u < previous.bklog_u
+        || current.sending_u < previous.sending_u
+        || current.pending_u < previous.pending_u
+        || current.max_slots < previous.max_slots
+    {
+        return None;
+    }
+
+    let delta_sends = current.sends - previous.sends;
+    let delta_recvs = current.recvs - previous.recvs;
+    let delta_bad_xids = current.bad_xids - previous.bad_xids;
+    let delta_req = current.req_u - previous.req_u;
+    let delta_bklog = current.bklog_u - previous.bklog_u;
+    let delta_sending = current.sending_u - previous.sending_u;
+    let delta_pending = current.pending_u - previous.pending_u;
+
+    let req_f = delta_req as f64;
+    let bklog_per_req = safe_div(delta_bklog as f64, req_f);
+    let sending_per_req = safe_div(delta_sending as f64, req_f);
+    let pending_per_req = safe_div(delta_pending as f64, req_f);
+
+    Some(DeltaXprtStats {
+        protocol: current.protocol.clone(),
+        delta_sends,
+        delta_recvs,
+        delta_bad_xids,
+        delta_req,
+        delta_bklog,
+        delta_sending,
+        delta_pending,
+        max_slots: current.max_slots,
+        bklog_per_req,
+        sending_per_req,
+        pending_per_req,
     })
 }
 
@@ -367,6 +437,108 @@ mod tests {
         assert_eq!(delta.iops, 0.0);
         assert_eq!(delta.kb_per_sec, 0.0);
         assert!(delta.avg_rtt > 0.0);
+    }
+
+    // --- calculate_xprt_delta tests ---
+
+    fn make_xprt(
+        sends: i64,
+        recvs: i64,
+        req_u: i64,
+        bklog_u: i64,
+        sending_u: i64,
+        pending_u: i64,
+        max_slots: i64,
+    ) -> XprtStats {
+        XprtStats {
+            protocol: "tcp".to_string(),
+            sends,
+            recvs,
+            bad_xids: 0,
+            req_u,
+            bklog_u,
+            max_slots,
+            sending_u,
+            pending_u,
+        }
+    }
+
+    #[test]
+    fn test_xprt_delta_computes_per_request_averages() {
+        // Between the two samples: 1000 new requests, 200 units of
+        // cumulative backlog, 500 units of sending, 300 of pending.
+        // Per-request averages should be 0.2 / 0.5 / 0.3.
+        let prev = make_xprt(10_000, 9_998, 10_000, 100, 50_000, 200_000, 32);
+        let curr = make_xprt(11_000, 10_998, 11_000, 300, 50_500, 200_300, 48);
+
+        let delta =
+            calculate_xprt_delta(Some(&prev), Some(&curr)).expect("delta should be computed");
+
+        assert_eq!(delta.delta_sends, 1000);
+        assert_eq!(delta.delta_recvs, 1000);
+        assert_eq!(delta.delta_req, 1000);
+        assert_eq!(delta.delta_bklog, 200);
+        assert_eq!(delta.delta_sending, 500);
+        assert_eq!(delta.delta_pending, 300);
+        assert_eq!(delta.max_slots, 48); // high-water mark carried forward
+        assert!((delta.bklog_per_req - 0.2).abs() < 1e-9);
+        assert!((delta.sending_per_req - 0.5).abs() < 1e-9);
+        assert!((delta.pending_per_req - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_xprt_delta_returns_none_when_either_side_missing() {
+        let xprt = make_xprt(100, 100, 100, 0, 0, 0, 4);
+        assert!(calculate_xprt_delta(None, Some(&xprt)).is_none());
+        assert!(calculate_xprt_delta(Some(&xprt), None).is_none());
+        assert!(calculate_xprt_delta(None, None).is_none());
+    }
+
+    #[test]
+    fn test_xprt_delta_returns_none_on_counter_reset() {
+        // sends went backwards — almost certainly a remount. Must
+        // drop the sample so we do not produce a nonsense negative
+        // delta that would later panic inside Prometheus.
+        let prev = make_xprt(10_000, 9_998, 10_000, 100, 50_000, 200_000, 32);
+        let curr = make_xprt(500, 500, 500, 0, 1_000, 2_000, 4);
+        assert!(calculate_xprt_delta(Some(&prev), Some(&curr)).is_none());
+    }
+
+    #[test]
+    fn test_xprt_delta_returns_none_on_protocol_change() {
+        // Transport swap between samples implies the mount was
+        // reconfigured; dropping the sample is safer than producing
+        // a struct labelled with the new protocol but whose
+        // numbers mix the two.
+        let prev = XprtStats {
+            protocol: "tcp".to_string(),
+            ..make_xprt(10_000, 9_998, 10_000, 100, 50_000, 200_000, 32)
+        };
+        let curr = XprtStats {
+            protocol: "rdma".to_string(),
+            ..make_xprt(11_000, 10_998, 11_000, 100, 50_000, 200_000, 32)
+        };
+        assert!(calculate_xprt_delta(Some(&prev), Some(&curr)).is_none());
+    }
+
+    #[test]
+    fn test_xprt_delta_handles_zero_request_delta_without_nan() {
+        // Zero requests between samples — per-request averages must
+        // be 0.0 (not NaN from divide-by-zero), because downstream
+        // display code formats them as floats and NaN would corrupt
+        // the output.
+        let prev = make_xprt(1000, 1000, 1000, 42, 500, 800, 16);
+        let curr = prev.clone();
+        let delta = calculate_xprt_delta(Some(&prev), Some(&curr))
+            .expect("equal samples should still produce an all-zeros delta");
+        assert_eq!(delta.delta_req, 0);
+        assert_eq!(delta.bklog_per_req, 0.0);
+        assert_eq!(delta.sending_per_req, 0.0);
+        assert_eq!(delta.pending_per_req, 0.0);
+        assert!(
+            !delta.bklog_per_req.is_nan(),
+            "per-req averages must never be NaN"
+        );
     }
 
     #[test]
