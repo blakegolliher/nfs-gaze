@@ -94,6 +94,7 @@ fn create_test_mount(device: &str, mount_point: &str) -> NFSMount {
         }),
         bytes_read: 10485760,
         bytes_write: 20971520,
+        xprt: None,
     }
 }
 

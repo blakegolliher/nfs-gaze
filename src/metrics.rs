@@ -597,6 +597,7 @@ mod tests {
             events: Some(NFSEvents::default()),
             bytes_read: 1048576,
             bytes_write: 2097152,
+            xprt: None,
         }
     }
 

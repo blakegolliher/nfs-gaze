@@ -27,6 +27,7 @@ pub fn create_test_mount_with_params(device: &str, mount_point: &str) -> NFSMoun
         events: Some(create_default_events()),
         bytes_read: 1048576,
         bytes_write: 2097152,
+        xprt: None,
     }
 }
 
@@ -42,6 +43,7 @@ pub fn create_test_mount_with_operations(operations: HashMap<String, NFSOperatio
         events: None,
         bytes_read: 0,
         bytes_write: 0,
+        xprt: None,
     }
 }
 

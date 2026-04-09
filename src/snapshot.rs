@@ -375,6 +375,7 @@ mod tests {
             events: None,
             bytes_read: 0,
             bytes_write: 0,
+            xprt: None,
         }
     }
 

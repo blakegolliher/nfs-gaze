@@ -15,6 +15,7 @@ fn test_display_stats_simple_without_bandwidth() {
         events: None,
         bytes_read: 0,
         bytes_write: 0,
+        xprt: None,
     };
 
     let stats = vec![
@@ -94,6 +95,7 @@ fn test_display_stats_simple_with_bandwidth() {
         events: None,
         bytes_read: 0,
         bytes_write: 0,
+        xprt: None,
     };
 
     let stats = vec![
@@ -173,6 +175,7 @@ fn test_display_stats_simple_empty_stats() {
         events: None,
         bytes_read: 0,
         bytes_write: 0,
+        xprt: None,
     };
 
     let stats: Vec<DeltaStats> = vec![];

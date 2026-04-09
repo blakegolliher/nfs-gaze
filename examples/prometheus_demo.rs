@@ -58,6 +58,7 @@ fn main() {
                     events: None,
                     bytes_read: 10485760,
                     bytes_write: 20971520,
+                    xprt: None,
                 };
 
                 // Export metrics

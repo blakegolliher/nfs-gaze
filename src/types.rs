@@ -82,6 +82,65 @@ pub struct NFSEvents {
     pub pnfs_write: i64,        // index 26
 }
 
+/// RPC transport statistics parsed from the `xprt:` line in
+/// `/proc/self/mountstats`.
+///
+/// The field set here matches the TCP variant, which is by far the
+/// most common transport for NFSv3/v4 in Linux since the mid-2000s.
+/// UDP and RDMA use different field layouts, so the parser sets
+/// [`NFSMount::xprt`] to `None` for those protocols rather than
+/// attempting a best-effort map — a partially populated struct is
+/// harder to reason about than a missing one.
+///
+/// The fields with a `_u` suffix in the kernel (`req_u`, `bklog_u`,
+/// `sending_u`, `pending_u`) are renamed to clearer names here;
+/// their kernel semantics are:
+///
+/// - `req_u` — cumulative count of requests for slot accounting.
+///   Used as the denominator for per-request averages of the
+///   other `_u` fields. Roughly equal to [`Self::sends`] in a
+///   healthy system.
+/// - `bklog_u` — cumulative length of the backlog queue across
+///   every enqueue. If this is climbing between samples, the
+///   client is slot-starved: RPCs are queueing up waiting for a
+///   free slot before they can even hit the wire. This is the
+///   smoking gun for slot exhaustion.
+/// - `max_slots` — high water mark of slots actually used. If this
+///   equals the configured cap (`tcp_max_slot_table_entries`),
+///   the client has hit the ceiling.
+/// - `sending_u` — cumulative time (weighted by request count) in
+///   the "sending" state. High values mean the socket send queue
+///   is backing up, often a single-connection bottleneck that
+///   `nconnect` can fix.
+/// - `pending_u` — cumulative time waiting for a reply from the
+///   server. High pending + low sending means the bottleneck is
+///   the server or the network, not the client.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XprtStats {
+    /// Transport protocol tag: `"tcp"`, `"udp"`, or `"rdma"`.
+    pub protocol: String,
+    /// Cumulative number of RPC requests sent over this transport.
+    pub sends: i64,
+    /// Cumulative number of RPC replies received.
+    pub recvs: i64,
+    /// RPC replies with an XID that did not match any outstanding
+    /// request. Usually zero; any non-zero value means the server
+    /// is confused or the connection is corrupt.
+    pub bad_xids: i64,
+    /// Cumulative request count used as the denominator for
+    /// per-request averages of `bklog_u`, `sending_u`, `pending_u`.
+    pub req_u: i64,
+    /// Cumulative backlog queue length — see type-level docs.
+    pub bklog_u: i64,
+    /// High water mark of slots used (not a cumulative counter; it
+    /// only moves upward over the lifetime of the mount).
+    pub max_slots: i64,
+    /// Cumulative "sending" state dwell — see type-level docs.
+    pub sending_u: i64,
+    /// Cumulative "pending" state dwell — see type-level docs.
+    pub pending_u: i64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NFSMount {
     pub device: String,
@@ -93,6 +152,10 @@ pub struct NFSMount {
     pub events: Option<NFSEvents>,
     pub bytes_read: i64,
     pub bytes_write: i64,
+    /// RPC transport statistics, when the parser recognised the
+    /// `xprt:` line layout. `None` for unrecognised protocols (UDP,
+    /// RDMA) or for mounts that did not have an `xprt:` line at all.
+    pub xprt: Option<XprtStats>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

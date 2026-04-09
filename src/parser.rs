@@ -1,4 +1,4 @@
-use crate::types::{NFSEvents, NFSMount, NFSOperation, NfsGazeError, Result};
+use crate::types::{NFSEvents, NFSMount, NFSOperation, NfsGazeError, Result, XprtStats};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -13,6 +13,16 @@ const MIN_KEY_VALUE_FIELDS: usize = 2;
 const PNFS_READ_INDEX: usize = 25;
 const PNFS_WRITE_INDEX: usize = 26;
 const OPERATION_ERRORS_INDEX: usize = 8;
+
+/// Number of whitespace-separated fields on a TCP `xprt:` line after
+/// the `xprt:` label itself. Layout (from net/sunrpc/xprtsock.c):
+///
+/// ```text
+/// xprt: tcp <srcport> <bind> <connect> <connect_time> <idle_time>
+///           <sends> <recvs> <bad_xids> <req_u> <bklog_u> <max_slots>
+///           <sending_u> <pending_u>
+/// ```
+const TCP_XPRT_FIELD_COUNT: usize = 14;
 
 /// Parse the events line into an NFSEvents struct
 pub fn parse_events(parts: &[String]) -> Result<NFSEvents> {
@@ -130,10 +140,10 @@ fn parse_field(value: &str, field: &str) -> Result<i64> {
     })
 }
 
-/// Lines that look like "OP: stats..." but aren't actual NFS operations
-const IGNORED_PREFIXES: &[&str] = &[
-    "RPC", "xprt", "per-op", "opts", "caps", "sec", "nfsv4", "nfsv3",
-];
+/// Lines that look like "OP: stats..." but aren't actual NFS operations.
+/// Note that `xprt:` is *not* in this list — it has its own parser
+/// branch in `parse_stats_line` and populates `NFSMount::xprt`.
+const IGNORED_PREFIXES: &[&str] = &["RPC", "per-op", "opts", "caps", "sec", "nfsv4", "nfsv3"];
 
 /// Main mountstats parser
 struct MountstatsParser {
@@ -214,6 +224,7 @@ impl MountstatsParser {
             events: None,
             bytes_read: 0,
             bytes_write: 0,
+            xprt: None,
         });
         Ok(())
     }
@@ -225,6 +236,8 @@ impl MountstatsParser {
             self.parse_events_line(line)
         } else if line.starts_with("bytes:") {
             self.parse_bytes(line)
+        } else if line.starts_with("xprt:") {
+            self.parse_xprt(line)
         } else if line.contains(':') && !IGNORED_PREFIXES.iter().any(|p| line.starts_with(p)) {
             self.parse_operation(line)
         } else {
@@ -283,6 +296,62 @@ impl MountstatsParser {
                 Some(val) => parse_field(val, "bytes_write")?,
                 None => 0,
             };
+        }
+        Ok(())
+    }
+
+    fn parse_xprt(&mut self, line: &str) -> Result<()> {
+        // The line looks like `xprt:\ttcp 732 1 40 0 0 59381805 ...`
+        // — one "xprt:" token, one protocol tag, then the numeric
+        // fields. We handle TCP in full; UDP and RDMA have different
+        // layouts and are mapped to None so downstream code can tell
+        // "no data" apart from "data layout I do not understand".
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            return Ok(()); // malformed, ignore rather than fail parsing
+        }
+        let protocol = parts[1];
+
+        let xprt = match protocol {
+            "tcp" if parts.len() > TCP_XPRT_FIELD_COUNT => {
+                // parts[0] = "xprt:", parts[1] = "tcp",
+                // parts[2..] = the 13 numeric fields. The fields we
+                // actually care about live at these offsets:
+                //
+                //   2   srcport
+                //   3   bind_count
+                //   4   connect_count
+                //   5   connect_time_ms
+                //   6   idle_time_s
+                //   7   sends
+                //   8   recvs
+                //   9   bad_xids
+                //   10  req_u
+                //   11  bklog_u
+                //   12  max_slots
+                //   13  sending_u
+                //   14  pending_u
+                Some(XprtStats {
+                    protocol: "tcp".to_string(),
+                    sends: parse_field(parts[7], "xprt_sends")?,
+                    recvs: parse_field(parts[8], "xprt_recvs")?,
+                    bad_xids: parse_field(parts[9], "xprt_bad_xids")?,
+                    req_u: parse_field(parts[10], "xprt_req_u")?,
+                    bklog_u: parse_field(parts[11], "xprt_bklog_u")?,
+                    max_slots: parse_field(parts[12], "xprt_max_slots")?,
+                    sending_u: parse_field(parts[13], "xprt_sending_u")?,
+                    pending_u: parse_field(parts[14], "xprt_pending_u")?,
+                })
+            }
+            // UDP and RDMA have different field layouts. Rather than
+            // partially populate the struct and hide that fact behind
+            // an "unknown" tag, we leave xprt as None so callers can
+            // clearly tell unparseable data from absent data.
+            _ => None,
+        };
+
+        if let Some(ref mut mount) = self.current_mount {
+            mount.xprt = xprt;
         }
         Ok(())
     }
@@ -508,6 +577,66 @@ bytes: 1048576 0 0 0 0
         let op = parse_nfs_operation("READ", &stats).expect("Should parse without errors field");
         assert_eq!(op.ops, 100);
         assert_eq!(op.errors, 0);
+    }
+
+    #[test]
+    fn test_parse_xprt_tcp_line_populates_all_fields() {
+        // Real xprt line captured from /proc/self/mountstats on this
+        // host. The layout is documented at TCP_XPRT_FIELD_COUNT.
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 12345
+xprt:	tcp 732 1 40 0 0 59381805 59381803 2 84476199495 0 7091 820821642 83982296098
+READ: 100 95 5 1024 2048 10 20 30 2
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        let mount = &mounts["/mnt/nfs"];
+        let xprt = mount
+            .xprt
+            .as_ref()
+            .expect("xprt should have been populated from TCP line");
+
+        assert_eq!(xprt.protocol, "tcp");
+        assert_eq!(xprt.sends, 59381805);
+        assert_eq!(xprt.recvs, 59381803);
+        assert_eq!(xprt.bad_xids, 2);
+        assert_eq!(xprt.req_u, 84476199495);
+        assert_eq!(xprt.bklog_u, 0);
+        assert_eq!(xprt.max_slots, 7091);
+        assert_eq!(xprt.sending_u, 820821642);
+        assert_eq!(xprt.pending_u, 83982296098);
+    }
+
+    #[test]
+    fn test_parse_xprt_udp_is_unparsed_but_not_an_error() {
+        // UDP has a different field layout. We intentionally set xprt
+        // to None rather than partially populate it — downstream code
+        // can tell "unknown layout" from "no xprt line" by the None.
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+xprt:	udp 1234 1 5000 5000 0 1000 0 10 50 100
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        let mount = &mounts["/mnt/nfs"];
+        assert!(
+            mount.xprt.is_none(),
+            "UDP xprt should currently be parsed as None, not an error"
+        );
+    }
+
+    #[test]
+    fn test_parse_xprt_truncated_tcp_line_is_treated_as_unparseable() {
+        // A truncated line (too few fields for TCP) should not panic
+        // or return Err — it should leave xprt as None, because we
+        // cannot safely extract the higher-index fields.
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+xprt:	tcp 732 1 40 0 0 59381805 59381803
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        assert!(mounts["/mnt/nfs"].xprt.is_none());
     }
 
     #[test]
