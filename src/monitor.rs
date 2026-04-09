@@ -1,7 +1,7 @@
-use crate::display::display_stats_simple;
+use crate::display::{display_stats_simple, display_xprt_summary};
 use crate::parser::parse_mountstats;
 use crate::snapshot::{MountAggregator, MountReport, Report, CURRENT_SCHEMA_VERSION};
-use crate::stats::{calculate_delta_stats, filter_operations};
+use crate::stats::{calculate_delta_stats, calculate_xprt_delta, filter_operations};
 use crate::types::{NFSMount, NfsGazeError, Result};
 use chrono::Utc;
 use signal_hook::{consts::SIGINT, consts::SIGTERM, iterator::Signals};
@@ -19,6 +19,20 @@ use std::time::{Duration, Instant};
 /// unreadable) would loop forever printing the same error each
 /// interval.
 const MAX_CONSECUTIVE_PARSE_FAILURES: u32 = 10;
+
+/// Read the configured TCP RPC slot table cap from the kernel.
+///
+/// Returns `None` if the sysctl is unreadable for any reason (not a
+/// Linux kernel, `/proc/sys` not mounted, sunrpc module missing,
+/// unusual permissions). The value is purely informational — it is
+/// used alongside the per-mount `max_slots` high-water mark to let
+/// users tell "lots of headroom" from "at the ceiling" — and any
+/// consumer must be prepared for a `None` fallback rather than
+/// failing the whole capture session on it.
+pub fn read_tcp_slot_cap() -> Option<i64> {
+    let s = std::fs::read_to_string("/proc/sys/sunrpc/tcp_max_slot_table_entries").ok()?;
+    s.trim().parse::<i64>().ok()
+}
 
 /// Configuration for the monitoring loop.
 ///
@@ -42,6 +56,10 @@ pub struct MonitorConfig<'a> {
     /// this mode the live per-interval table is suppressed and the
     /// loop prints a `Sampling...` progress line to stderr instead.
     pub output: Option<PathBuf>,
+    /// Configured cap from `/proc/sys/sunrpc/tcp_max_slot_table_entries`,
+    /// read once at session start. Used only to render the xprt
+    /// one-liner; `None` is a soft fallback that displays as `?`.
+    pub slot_cap: Option<i64>,
     pub show_bandwidth: bool,
     pub clear_screen: bool,
     pub metrics_manager: Option<&'a crate::metrics::MetricsManager>,
@@ -130,6 +148,7 @@ impl Monitor {
             count,
             duration,
             output,
+            slot_cap,
             show_bandwidth,
             clear_screen,
             metrics_manager,
@@ -259,6 +278,14 @@ impl Monitor {
                     // Filter operations if specified
                     delta_stats = filter_operations(delta_stats, &operations_filter);
 
+                    // xprt delta is computed alongside the per-op
+                    // deltas but shown in a separate one-liner so
+                    // the op table stays uncluttered.
+                    let xprt_delta = calculate_xprt_delta(
+                        previous_mount.xprt.as_ref(),
+                        current_mount.xprt.as_ref(),
+                    );
+
                     // Either aggregate for the end-of-session report
                     // or render the live table — never both, because
                     // output mode is intended as a silent capture.
@@ -275,6 +302,13 @@ impl Monitor {
                                 show_bandwidth,
                                 &timestamp,
                             )?;
+                            // Always print the xprt one-liner under
+                            // the op table when we have xprt data
+                            // for this mount. It co-appears with the
+                            // op table so an idle mount stays quiet.
+                            if let Some(ref x) = xprt_delta {
+                                display_xprt_summary(writer, x, slot_cap)?;
+                            }
                         }
 
                         // Prometheus metrics export is orthogonal to
@@ -448,6 +482,7 @@ mod tests {
                 count: 0,
                 duration: None,
                 output: None,
+                slot_cap: None,
                 show_bandwidth: false,
                 clear_screen: false,
                 metrics_manager: None,
@@ -496,6 +531,7 @@ mod tests {
                 count: 0,
                 duration: Some(target),
                 output: None,
+                slot_cap: None,
                 show_bandwidth: false,
                 clear_screen: false,
                 metrics_manager: None,
@@ -543,6 +579,7 @@ mod tests {
                 // deadline is the only reason the loop terminates.
                 duration: Some(Duration::from_millis(80)),
                 output: Some(output_path.clone()),
+                slot_cap: None,
                 show_bandwidth: false,
                 clear_screen: false,
                 metrics_manager: None,

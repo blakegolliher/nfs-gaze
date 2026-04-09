@@ -1,4 +1,4 @@
-use crate::types::{DeltaStats, NFSMount, Result};
+use crate::types::{DeltaStats, DeltaXprtStats, NFSMount, Result};
 use chrono::{DateTime, Utc};
 use std::io::Write;
 
@@ -62,6 +62,43 @@ pub fn display_stats_simple<W: Write>(
     }
 
     writeln!(writer)?;
+    Ok(())
+}
+
+/// Render the compact one-line xprt summary printed under the live
+/// per-op table.
+///
+/// The format is ASCII-only and plain-text for terminal portability
+/// and trivial log-scraping. Example output:
+///
+/// ```text
+/// xprt tcp slots 7091/65536  bklog 0.000/req  sending 0.82/req  pending 83.98/req
+/// ```
+///
+/// `slot_cap` is shown as a literal `?` when unknown (e.g. the
+/// `/proc/sys/sunrpc/tcp_max_slot_table_entries` sysctl could not be
+/// read). The `bklog_per_req` field uses three decimal places
+/// because it is usually very small but its transition from 0.000
+/// to anything non-zero is the signal we most care about.
+pub fn display_xprt_summary<W: Write>(
+    writer: &mut W,
+    delta: &DeltaXprtStats,
+    slot_cap: Option<i64>,
+) -> Result<()> {
+    let cap_display = match slot_cap {
+        Some(c) => c.to_string(),
+        None => "?".to_string(),
+    };
+    writeln!(
+        writer,
+        "xprt {} slots {}/{}  bklog {:.3}/req  sending {:.2}/req  pending {:.2}/req",
+        delta.protocol,
+        delta.max_slots,
+        cap_display,
+        delta.bklog_per_req,
+        delta.sending_per_req,
+        delta.pending_per_req,
+    )?;
     Ok(())
 }
 
@@ -146,6 +183,70 @@ mod tests {
         assert_eq!(format_rate(1.5), "1.5");
         assert_eq!(format_rate(100.0), "100.0");
         assert_eq!(format_rate(1000.5), "1000.5");
+    }
+
+    #[test]
+    fn test_display_xprt_summary_with_known_slot_cap() {
+        let delta = DeltaXprtStats {
+            protocol: "tcp".to_string(),
+            delta_sends: 1000,
+            delta_recvs: 1000,
+            delta_bad_xids: 0,
+            delta_req: 1000,
+            delta_bklog: 5,
+            delta_sending: 820,
+            delta_pending: 8398,
+            max_slots: 7091,
+            bklog_per_req: 0.005,
+            sending_per_req: 0.82,
+            pending_per_req: 83.98,
+        };
+        let mut buf = Vec::<u8>::new();
+        display_xprt_summary(&mut buf, &delta, Some(65536)).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(
+            out.contains("xprt tcp slots 7091/65536"),
+            "missing slot hwm/cap: {out}"
+        );
+        assert!(
+            out.contains("bklog 0.005/req"),
+            "missing bklog field: {out}"
+        );
+        assert!(
+            out.contains("sending 0.82/req"),
+            "missing sending field: {out}"
+        );
+        assert!(
+            out.contains("pending 83.98/req"),
+            "missing pending field: {out}"
+        );
+    }
+
+    #[test]
+    fn test_display_xprt_summary_unknown_slot_cap_shows_question_mark() {
+        let delta = DeltaXprtStats {
+            protocol: "tcp".to_string(),
+            delta_sends: 0,
+            delta_recvs: 0,
+            delta_bad_xids: 0,
+            delta_req: 0,
+            delta_bklog: 0,
+            delta_sending: 0,
+            delta_pending: 0,
+            max_slots: 16,
+            bklog_per_req: 0.0,
+            sending_per_req: 0.0,
+            pending_per_req: 0.0,
+        };
+        let mut buf = Vec::<u8>::new();
+        display_xprt_summary(&mut buf, &delta, None).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(
+            out.contains("slots 16/?"),
+            "expected `?` placeholder for unknown cap, got: {out}"
+        );
     }
 
     #[test]

@@ -38,7 +38,7 @@ fn dispatch_command(cmd: nfs_gaze::cli::Command) -> anyhow::Result<()> {
 async fn run_monitor(args: nfs_gaze::cli::Args) -> anyhow::Result<()> {
     use nfs_gaze::cli::parse_operations_filter;
     use nfs_gaze::metrics::MetricsManager;
-    use nfs_gaze::monitor::{Monitor, MonitorConfig};
+    use nfs_gaze::monitor::{read_tcp_slot_cap, Monitor, MonitorConfig};
     use nfs_gaze::parser::parse_mountstats;
     use std::io::stdout;
     use std::time::Duration;
@@ -109,6 +109,10 @@ async fn run_monitor(args: nfs_gaze::cli::Args) -> anyhow::Result<()> {
     // Convert interval from seconds to Duration
     let interval = Duration::from_secs(args.interval);
     let duration = args.duration.map(Duration::from_secs);
+    // Read the slot cap once at startup; it is used purely for
+    // display alongside the xprt one-liner, and a None fallback is
+    // fine if the sysctl is unreadable.
+    let slot_cap = read_tcp_slot_cap();
 
     // Start monitoring loop
     monitor
@@ -122,6 +126,7 @@ async fn run_monitor(args: nfs_gaze::cli::Args) -> anyhow::Result<()> {
                 count: args.count,
                 duration,
                 output: args.output.clone(),
+                slot_cap,
                 show_bandwidth: args.show_bandwidth,
                 clear_screen: args.clear_screen,
                 metrics_manager: metrics_manager.as_ref(),
