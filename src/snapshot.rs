@@ -12,7 +12,7 @@
 //! compatible (via `#[serde(default)]`) or accompanied by a bump of
 //! [`CURRENT_SCHEMA_VERSION`].
 
-use crate::types::{DeltaStats, NFSMount};
+use crate::types::{DeltaStats, DeltaXprtStats, NFSMount};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -66,6 +66,43 @@ pub struct MountReport {
     /// Per-operation aggregated stats, sorted by `ops` descending so
     /// the hottest operations appear first when the report is printed.
     pub operations: Vec<OpReport>,
+    /// Aggregated RPC transport stats, if the mount had an `xprt:`
+    /// line in its mountstats. Emitted only when present so old
+    /// snapshot files written before xprt support deserialise
+    /// unchanged, and so snapshots of UDP/RDMA mounts (which the
+    /// parser currently leaves as None) do not pad the report with
+    /// an empty placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xprt: Option<XprtReport>,
+}
+
+/// Session-level summary of RPC transport statistics for a mount.
+///
+/// All counter fields are the sum of the per-interval deltas observed
+/// across the capture, so they represent "work done during this
+/// session" rather than the kernel's lifetime totals. The per-request
+/// averages are session-weighted: `sum(Δ_x) / sum(Δreq)`, not the
+/// arithmetic mean of the per-interval ratios, so busy and idle
+/// intervals are weighted fairly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XprtReport {
+    pub protocol: String,
+    /// High-water mark of slots actually used, across the session.
+    /// Carried forward from the kernel gauge rather than derived
+    /// from deltas (it is monotonically non-decreasing by design).
+    pub max_slots: i64,
+    /// Configured cap from `/proc/sys/sunrpc/tcp_max_slot_table_entries`
+    /// at capture time, when readable. Omitted from the JSON
+    /// entirely when unknown so a consumer can tell "capped at N"
+    /// from "cap unknown" without a sentinel value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_cap: Option<i64>,
+    pub sends: i64,
+    pub recvs: i64,
+    pub bad_xids: i64,
+    pub bklog_per_req: f64,
+    pub sending_per_req: f64,
+    pub pending_per_req: f64,
 }
 
 /// Mount-level totals summed across every operation and every sample.
@@ -127,6 +164,11 @@ pub struct MountAggregator {
     fstype: String,
     options: String,
     ops: HashMap<String, OpAccumulator>,
+    /// Lazily populated on the first `record_xprt` call. Stays
+    /// `None` for mounts whose xprt deltas never arrived (UDP/RDMA
+    /// or counter reset), so `finalise` can emit `xprt: None` in
+    /// the report rather than a misleading zeroed block.
+    xprt: Option<XprtAccumulator>,
 }
 
 #[derive(Default)]
@@ -145,6 +187,24 @@ struct OpAccumulator {
     rtt_max_avg_ms: Option<f64>,
 }
 
+/// Streaming accumulator for [`DeltaXprtStats`] samples.
+///
+/// Tracks session totals for the cumulative counters and the
+/// running high-water mark for `max_slots`. Per-request averages
+/// are derived at finalise time from the total sums, giving a
+/// session-weighted rather than interval-averaged figure.
+struct XprtAccumulator {
+    protocol: String,
+    sends_total: i64,
+    recvs_total: i64,
+    bad_xids_total: i64,
+    req_total: i64,
+    bklog_total: i64,
+    sending_total: i64,
+    pending_total: i64,
+    max_slots_hwm: i64,
+}
+
 impl MountAggregator {
     /// Start a new aggregator for the given mount. `fstype` and
     /// `options` are accepted as caller-supplied strings rather than
@@ -157,6 +217,43 @@ impl MountAggregator {
             fstype,
             options,
             ops: HashMap::new(),
+            xprt: None,
+        }
+    }
+
+    /// Fold one interval's xprt delta into the session totals.
+    ///
+    /// On first call the inner accumulator is lazily created from
+    /// the protocol tag of the delta. Subsequent calls must use the
+    /// same protocol — a mismatch is treated as a dropped sample
+    /// because mixing protocols within a session would produce
+    /// numbers that do not describe any real transport. This
+    /// shouldn't happen in practice (the delta function already
+    /// drops protocol-change samples) but the defence is cheap.
+    pub fn record_xprt(&mut self, delta: &DeltaXprtStats) {
+        let acc = self.xprt.get_or_insert_with(|| XprtAccumulator {
+            protocol: delta.protocol.clone(),
+            sends_total: 0,
+            recvs_total: 0,
+            bad_xids_total: 0,
+            req_total: 0,
+            bklog_total: 0,
+            sending_total: 0,
+            pending_total: 0,
+            max_slots_hwm: 0,
+        });
+        if acc.protocol != delta.protocol {
+            return;
+        }
+        acc.sends_total += delta.delta_sends;
+        acc.recvs_total += delta.delta_recvs;
+        acc.bad_xids_total += delta.delta_bad_xids;
+        acc.req_total += delta.delta_req;
+        acc.bklog_total += delta.delta_bklog;
+        acc.sending_total += delta.delta_sending;
+        acc.pending_total += delta.delta_pending;
+        if delta.max_slots > acc.max_slots_hwm {
+            acc.max_slots_hwm = delta.max_slots;
         }
     }
 
@@ -195,7 +292,10 @@ impl MountAggregator {
     /// `duration_sec` is the total capture length used to derive
     /// `ops_per_sec` fields. A zero duration is handled gracefully:
     /// all derived rates become zero rather than dividing by zero.
-    pub fn finalise(self, duration_sec: u64) -> MountReport {
+    /// `slot_cap` is stamped into the emitted [`XprtReport`] (if
+    /// any); it is accepted here rather than held on the aggregator
+    /// because it is a session-constant external value.
+    pub fn finalise(self, duration_sec: u64, slot_cap: Option<i64>) -> MountReport {
         let denom = duration_sec as f64;
         let mut total_ops: i64 = 0;
         let mut total_retrans: i64 = 0;
@@ -255,6 +355,27 @@ impl MountAggregator {
             errors: total_errors,
         };
 
+        // Fold the xprt accumulator, if any, into its final form.
+        // Session-weighted per-request averages divide the summed
+        // deltas by the summed request count, matching the
+        // interval-level semantics of calculate_xprt_delta but
+        // across the whole session.
+        let xprt = self.xprt.map(|acc| {
+            let req_f = acc.req_total as f64;
+            let safe = |n: i64| if req_f > 0.0 { n as f64 / req_f } else { 0.0 };
+            XprtReport {
+                protocol: acc.protocol,
+                max_slots: acc.max_slots_hwm,
+                slot_cap,
+                sends: acc.sends_total,
+                recvs: acc.recvs_total,
+                bad_xids: acc.bad_xids_total,
+                bklog_per_req: safe(acc.bklog_total),
+                sending_per_req: safe(acc.sending_total),
+                pending_per_req: safe(acc.pending_total),
+            }
+        });
+
         MountReport {
             device: self.device,
             mount_point: self.mount_point,
@@ -262,6 +383,7 @@ impl MountAggregator {
             options: self.options,
             summary,
             operations,
+            xprt,
         }
     }
 }
@@ -331,6 +453,7 @@ mod tests {
                 errors: 0,
             },
             operations: Vec::new(),
+            xprt: None,
         };
         let json = serde_json::to_string(&mount).expect("serialise");
         assert!(
@@ -419,7 +542,7 @@ mod tests {
         agg.record(&[delta("READ", 200, 240, 0, 0)]);
         agg.record(&[delta("READ", 50, 30, 0, 0)]);
 
-        let report = agg.finalise(10);
+        let report = agg.finalise(10, None);
         assert_eq!(report.summary.total_ops, 350);
         assert!((report.summary.ops_per_sec - 35.0).abs() < 1e-9);
         assert_eq!(report.operations.len(), 1);
@@ -446,7 +569,7 @@ mod tests {
         agg.record(&[delta("READ", 10, 50, 0, 0)]); // avg 5.0
         agg.record(&[delta("READ", 10, 5, 0, 0)]); // avg 0.5
 
-        let report = agg.finalise(3);
+        let report = agg.finalise(3, None);
         let op = &report.operations[0];
         assert!((op.rtt_min_ms - 0.5).abs() < 1e-9);
         assert!((op.rtt_max_ms - 5.0).abs() < 1e-9);
@@ -463,7 +586,7 @@ mod tests {
 
         agg.record(&[delta("READ", 100, 50, 0, 0), delta("GETATTR", 0, 0, 0, 0)]);
 
-        let report = agg.finalise(10);
+        let report = agg.finalise(10, None);
         assert_eq!(report.operations.len(), 1, "silent op should be dropped");
         assert_eq!(report.operations[0].name, "READ");
         assert_eq!(report.summary.total_ops, 100);
@@ -475,7 +598,7 @@ mod tests {
         let mut agg = MountAggregator::new(&mount, String::new(), String::new());
         agg.record(&[delta("READ", 50, 25, 0, 0)]);
 
-        let report = agg.finalise(0);
+        let report = agg.finalise(0, None);
         assert_eq!(report.summary.ops_per_sec, 0.0);
         assert_eq!(report.operations[0].ops_per_sec, 0.0);
         // The ops-weighted mean RTT is well-defined even at zero
@@ -492,7 +615,7 @@ mod tests {
         let mut agg = MountAggregator::new(&mount, String::new(), String::new());
         agg.record(&[delta("READ", 100, 50, 3, 7)]);
 
-        let report = agg.finalise(1);
+        let report = agg.finalise(1, None);
         assert_eq!(report.operations[0].retrans, 3);
         assert_eq!(report.operations[0].timeouts, 7);
         assert_eq!(report.summary.retrans, 3);
@@ -509,16 +632,147 @@ mod tests {
             delta("WRITE", 800, 400, 0, 0),
         ]);
 
-        let report = agg.finalise(10);
+        let report = agg.finalise(10, None);
         let names: Vec<&str> = report.operations.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(names, vec!["READ", "WRITE", "GETATTR"]);
+    }
+
+    fn xprt_delta(
+        delta_sends: i64,
+        delta_req: i64,
+        delta_bklog: i64,
+        delta_sending: i64,
+        delta_pending: i64,
+        max_slots: i64,
+    ) -> DeltaXprtStats {
+        DeltaXprtStats {
+            protocol: "tcp".to_string(),
+            delta_sends,
+            delta_recvs: delta_sends,
+            delta_bad_xids: 0,
+            delta_req,
+            delta_bklog,
+            delta_sending,
+            delta_pending,
+            max_slots,
+            bklog_per_req: if delta_req > 0 {
+                delta_bklog as f64 / delta_req as f64
+            } else {
+                0.0
+            },
+            sending_per_req: if delta_req > 0 {
+                delta_sending as f64 / delta_req as f64
+            } else {
+                0.0
+            },
+            pending_per_req: if delta_req > 0 {
+                delta_pending as f64 / delta_req as f64
+            } else {
+                0.0
+            },
+        }
+    }
+
+    #[test]
+    fn aggregator_folds_xprt_samples_with_session_weighting() {
+        // Two intervals. First: 1000 req, bklog 0, sending 500.
+        // Second: 500 req, bklog 100, sending 500. Session-weighted
+        // bklog/req = 100 / 1500 = 0.0666..., sending/req = 1000/1500 = 0.6666...
+        let mount = test_mount();
+        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        agg.record_xprt(&xprt_delta(1000, 1000, 0, 500, 100, 16));
+        agg.record_xprt(&xprt_delta(500, 500, 100, 500, 200, 32));
+
+        let report = agg.finalise(10, Some(65536));
+        let xprt = report.xprt.as_ref().expect("xprt report should be present");
+
+        assert_eq!(xprt.protocol, "tcp");
+        assert_eq!(xprt.max_slots, 32, "high-water mark should carry forward");
+        assert_eq!(xprt.slot_cap, Some(65536));
+        assert_eq!(xprt.sends, 1500);
+        assert_eq!(xprt.recvs, 1500);
+        // Session-weighted: 100 / 1500 ≈ 0.0667
+        assert!(
+            (xprt.bklog_per_req - (100.0 / 1500.0)).abs() < 1e-9,
+            "bklog_per_req should be session-weighted, got {}",
+            xprt.bklog_per_req
+        );
+        assert!((xprt.sending_per_req - (1000.0 / 1500.0)).abs() < 1e-9);
+        assert!((xprt.pending_per_req - (300.0 / 1500.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn aggregator_without_xprt_emits_none_not_empty_block() {
+        // No record_xprt calls → the finalised report should have
+        // xprt: None, which serde drops from the JSON entirely via
+        // the `skip_serializing_if` attribute. A zeroed XprtReport
+        // would be misleading (would look like "no slot pressure")
+        // so the distinction is load-bearing.
+        let mount = test_mount();
+        let agg = MountAggregator::new(&mount, String::new(), String::new());
+        let report = agg.finalise(10, Some(65536));
+        assert!(report.xprt.is_none());
+
+        let json = serde_json::to_string(&report).expect("serialise");
+        assert!(
+            !json.contains("\"xprt\""),
+            "xprt field should be skipped when None, got: {json}"
+        );
+    }
+
+    #[test]
+    fn aggregator_ignores_xprt_samples_with_mismatched_protocol() {
+        // A protocol change mid-session is already rejected upstream
+        // by calculate_xprt_delta, but the aggregator defends in
+        // depth: if the caller forces through a mismatched delta,
+        // it drops the sample rather than polluting the accumulator
+        // with values from a different transport.
+        let mount = test_mount();
+        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        agg.record_xprt(&xprt_delta(1000, 1000, 0, 500, 100, 16));
+        // Second delta with a different protocol tag:
+        let mut bogus = xprt_delta(9999, 9999, 9999, 9999, 9999, 9999);
+        bogus.protocol = "rdma".to_string();
+        agg.record_xprt(&bogus);
+
+        let report = agg.finalise(10, None);
+        let xprt = report.xprt.as_ref().expect("first sample seeds the accumulator");
+        assert_eq!(xprt.protocol, "tcp");
+        // Only the first sample's numbers should have landed.
+        assert_eq!(xprt.sends, 1000);
+        assert_eq!(xprt.max_slots, 16);
+    }
+
+    #[test]
+    fn xprt_report_round_trips_through_json_with_slot_cap_skipped_when_none() {
+        // slot_cap is Option and should disappear from the JSON
+        // when None — consumers tell "capped at N" from "cap
+        // unknown" by presence/absence of the field.
+        let report = XprtReport {
+            protocol: "tcp".into(),
+            max_slots: 42,
+            slot_cap: None,
+            sends: 100,
+            recvs: 100,
+            bad_xids: 0,
+            bklog_per_req: 0.0,
+            sending_per_req: 0.0,
+            pending_per_req: 0.0,
+        };
+        let json = serde_json::to_string(&report).expect("serialise");
+        assert!(
+            !json.contains("slot_cap"),
+            "slot_cap should be omitted when None: {json}"
+        );
+        let parsed: XprtReport = serde_json::from_str(&json).expect("round-trip");
+        assert_eq!(parsed, report);
     }
 
     #[test]
     fn aggregator_empty_session_produces_empty_report() {
         let mount = test_mount();
         let agg = MountAggregator::new(&mount, "nfs4".into(), "rw".into());
-        let report = agg.finalise(10);
+        let report = agg.finalise(10, None);
 
         assert_eq!(report.summary.total_ops, 0);
         assert_eq!(report.summary.ops_per_sec, 0.0);

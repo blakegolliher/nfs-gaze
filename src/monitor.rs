@@ -293,6 +293,16 @@ impl Monitor {
                         if output_mode {
                             if let Some(agg) = aggregators.get_mut(&current_mount.mount_point) {
                                 agg.record(&delta_stats);
+                                // xprt folds into the same
+                                // aggregator so the finalised
+                                // MountReport carries a matching
+                                // XprtReport. Idle xprt samples (no
+                                // delta but still non-None) are
+                                // silently added as zeros by
+                                // record_xprt.
+                                if let Some(ref x) = xprt_delta {
+                                    agg.record_xprt(x);
+                                }
                             }
                         } else {
                             display_stats_simple(
@@ -361,7 +371,7 @@ impl Monitor {
 
             let mut mount_reports: Vec<MountReport> = aggregators
                 .into_values()
-                .map(|agg| agg.finalise(duration_sec))
+                .map(|agg| agg.finalise(duration_sec, slot_cap))
                 .collect();
             // Sort by device for deterministic output across runs on
             // the same host; HashMap iteration order is otherwise

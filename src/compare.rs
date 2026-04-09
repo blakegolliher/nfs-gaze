@@ -384,6 +384,7 @@ mod tests {
                     errors: 0,
                 },
                 operations: ops,
+                xprt: None,
             }],
         }
     }
@@ -461,6 +462,7 @@ mod tests {
                         errors: 0,
                     },
                     operations: vec![],
+                    xprt: None,
                 },
                 MountReport {
                     device: "s:/b".into(),
@@ -475,6 +477,7 @@ mod tests {
                         errors: 0,
                     },
                     operations: vec![],
+                    xprt: None,
                 },
             ],
         };
