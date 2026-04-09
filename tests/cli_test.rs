@@ -47,6 +47,48 @@ fn test_cli_with_output() {
 }
 
 #[test]
+fn test_cli_compare_subcommand_parses_positional_args() {
+    use nfs_gaze::cli::Command;
+    use std::path::PathBuf;
+
+    let args = Args::try_parse_from([
+        "nfs-gaze",
+        "compare",
+        "baseline.json",
+        "new.json",
+        "BASELINE",
+        "NEW",
+    ])
+    .expect("compare subcommand with four positional args should parse");
+
+    match args.command {
+        Some(Command::Compare(c)) => {
+            assert_eq!(c.file1, PathBuf::from("baseline.json"));
+            assert_eq!(c.file2, PathBuf::from("new.json"));
+            assert_eq!(c.label1.as_deref(), Some("BASELINE"));
+            assert_eq!(c.label2.as_deref(), Some("NEW"));
+        }
+        other => panic!("expected Command::Compare, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cli_compare_subcommand_labels_are_optional() {
+    use nfs_gaze::cli::Command;
+
+    let args = Args::try_parse_from(["nfs-gaze", "compare", "a.json", "b.json"])
+        .expect("compare with only the two file arguments should parse");
+
+    match args.command {
+        Some(Command::Compare(c)) => {
+            assert!(c.label1.is_none());
+            assert!(c.label2.is_none());
+        }
+        other => panic!("expected Command::Compare, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_cli_with_mount_point() {
     let args = Args::try_parse_from(["nfs-gaze", "-m", "/mnt/nfs"])
         .expect("Should parse with mount point");

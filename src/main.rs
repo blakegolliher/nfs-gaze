@@ -12,14 +12,41 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(target_os = "linux")]
 async fn run_linux() -> anyhow::Result<()> {
     use clap::Parser;
-    use nfs_gaze::cli::{parse_operations_filter, Args};
+    use nfs_gaze::cli::Args;
+
+    let args = Args::parse();
+
+    // Subcommands branch away from the default run mode. Dispatch
+    // first so we do not waste work initialising Prometheus or
+    // reading /proc for a `compare` invocation that never needs
+    // either.
+    if let Some(cmd) = args.command.clone() {
+        return dispatch_command(cmd);
+    }
+
+    run_monitor(args).await
+}
+
+#[cfg(target_os = "linux")]
+fn dispatch_command(cmd: nfs_gaze::cli::Command) -> anyhow::Result<()> {
+    match cmd {
+        nfs_gaze::cli::Command::Compare(_args) => {
+            // The compare subcommand is scaffolded here so the CLI
+            // structure is stable, but the body lands in a follow-up
+            // commit to keep the diff reviewable.
+            anyhow::bail!("compare subcommand is not yet implemented")
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn run_monitor(args: nfs_gaze::cli::Args) -> anyhow::Result<()> {
+    use nfs_gaze::cli::parse_operations_filter;
     use nfs_gaze::metrics::MetricsManager;
     use nfs_gaze::monitor::{Monitor, MonitorConfig};
     use nfs_gaze::parser::parse_mountstats;
     use std::io::stdout;
     use std::time::Duration;
-
-    let args = Args::parse();
 
     // Parse operations filter
     let operations_filter = parse_operations_filter(args.operations.clone());

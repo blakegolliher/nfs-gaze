@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -6,6 +6,12 @@ use std::path::PathBuf;
 #[command(name = "nfs-gaze")]
 #[command(version)]
 #[command(about = "NFS I/O Statistics Monitor")]
+// When a subcommand is present, suppress the top-level "run mode"
+// flags so that e.g. `nfs-gaze compare a.json b.json` does not error
+// out on missing required-for-run defaults. Top-level flags remain
+// valid when no subcommand is given, preserving the original CLI
+// shape.
+#[command(args_conflicts_with_subcommands = true)]
 #[command(long_about = r#"
 NFS I/O Statistics Monitor
 
@@ -22,8 +28,11 @@ Examples:
   # Monitor specific operations with bandwidth
   nfs-gaze -m /mnt/nfs --ops READ,WRITE --bw
 
-  # Clear screen between iterations
-  nfs-gaze -m /mnt/nfs --clear
+  # Capture a 5-minute JSON snapshot for later analysis
+  nfs-gaze -d 300 -o /tmp/baseline.json
+
+  # Compare two snapshots
+  nfs-gaze compare baseline.json new-run.json BASELINE NEW
 "#)]
 pub struct Args {
     /// Mount point to monitor
@@ -82,6 +91,31 @@ pub struct Args {
     /// Metrics export interval in seconds
     #[arg(long, default_value = "10")]
     pub metrics_interval: u64,
+
+    /// Optional subcommand. When present, the top-level run-mode
+    /// flags above are ignored.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Subcommands that branch away from the default "live monitor" mode.
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Compare two nfs-gaze JSON snapshot reports side by side
+    Compare(CompareArgs),
+}
+
+/// Arguments for the `compare` subcommand.
+#[derive(ClapArgs, Debug, Clone)]
+pub struct CompareArgs {
+    /// First report file (baseline)
+    pub file1: PathBuf,
+    /// Second report file (comparison)
+    pub file2: PathBuf,
+    /// Optional display label for `file1` (defaults to "File1")
+    pub label1: Option<String>,
+    /// Optional display label for `file2` (defaults to "File2")
+    pub label2: Option<String>,
 }
 
 impl Args {
