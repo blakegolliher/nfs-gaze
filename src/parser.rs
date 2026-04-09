@@ -5,9 +5,9 @@ use std::io::{BufRead, BufReader, Read};
 
 // Minimum number of fields required for parsing
 const MIN_EVENTS_FIELDS: usize = 25;
-const MIN_OPERATION_STATS: usize = 9;
+const MIN_OPERATION_FIELDS: usize = 8;
 const MIN_BYTES_FIELDS: usize = 6;
-const MIN_AGE_FIELDS: usize = 2;
+const MIN_KEY_VALUE_FIELDS: usize = 2;
 
 // Optional field indices
 const PNFS_READ_INDEX: usize = 25;
@@ -76,12 +76,12 @@ pub fn parse_events(parts: &[String]) -> Result<NFSEvents> {
 
 /// Parse NFS operation statistics from a stats line
 pub fn parse_nfs_operation(op_name: &str, stats: &[String]) -> Result<NFSOperation> {
-    if stats.len() < MIN_OPERATION_STATS {
+    if stats.len() < MIN_OPERATION_FIELDS {
         return Err(NfsGazeError::ParseError(format!(
             "insufficient stats for operation {}: got {}, need {}",
             op_name,
             stats.len(),
-            MIN_OPERATION_STATS
+            MIN_OPERATION_FIELDS
         )));
     }
 
@@ -122,6 +122,19 @@ pub fn parse_nfs_operation(op_name: &str, stats: &[String]) -> Result<NFSOperati
     Ok(operation)
 }
 
+/// Helper to parse a field value from a whitespace-split line
+fn parse_field(value: &str, field: &str) -> Result<i64> {
+    value.parse().map_err(|e| NfsGazeError::FieldParseError {
+        field: field.to_string(),
+        source: e,
+    })
+}
+
+/// Lines that look like "OP: stats..." but aren't actual NFS operations
+const IGNORED_PREFIXES: &[&str] = &[
+    "RPC", "xprt", "per-op", "opts", "caps", "sec", "nfsv4", "nfsv3",
+];
+
 /// Main mountstats parser
 struct MountstatsParser {
     mounts: HashMap<String, NFSMount>,
@@ -136,20 +149,29 @@ impl MountstatsParser {
         }
     }
 
-    fn parse<R: BufRead>(&mut self, reader: R) -> Result<HashMap<String, NFSMount>> {
+    /// Flush current_mount into the mounts map
+    fn flush_current(&mut self) {
+        if let Some(mount) = self.current_mount.take() {
+            self.mounts.insert(mount.mount_point.clone(), mount);
+        }
+    }
+
+    fn parse<R: BufRead>(mut self, reader: R) -> Result<HashMap<String, NFSMount>> {
         for line in reader.lines() {
             let line = line?;
             self.parse_line(&line)?;
         }
-        Ok(self.mounts.clone())
+        self.flush_current();
+        Ok(self.mounts)
     }
 
     fn parse_line(&mut self, line: &str) -> Result<()> {
         let line = line.trim();
         if line.starts_with("device") && line.contains("nfs") {
-            self.parse_device_line(line)?
+            self.flush_current();
+            self.parse_device_line(line)?;
         } else if self.current_mount.is_some() {
-            self.parse_stats_line(line)?
+            self.parse_stats_line(line)?;
         }
         Ok(())
     }
@@ -164,16 +186,8 @@ impl MountstatsParser {
             )));
         }
 
-        let device_info: Vec<&str> = parts
-            .first()
-            .ok_or_else(|| NfsGazeError::ParseError("Missing device info".to_string()))?
-            .split_whitespace()
-            .collect();
-        let mount_info: Vec<&str> = parts
-            .get(1)
-            .ok_or_else(|| NfsGazeError::ParseError("Missing mount info".to_string()))?
-            .split_whitespace()
-            .collect();
+        let device_info: Vec<&str> = parts[0].split_whitespace().collect();
+        let mount_info: Vec<&str> = parts[1].split_whitespace().collect();
 
         if device_info.len() < 2 || mount_info.is_empty() {
             return Err(NfsGazeError::ParseError(format!(
@@ -182,24 +196,15 @@ impl MountstatsParser {
             )));
         }
 
-        let server_export = device_info.get(1).ok_or_else(|| {
-            NfsGazeError::ParseError("Missing server export in device info".to_string())
-        })?;
-        let mount_point = mount_info.first().ok_or_else(|| {
-            NfsGazeError::ParseError("Missing mount point in mount info".to_string())
-        })?;
+        let server_export = device_info[1];
+        let mount_point = mount_info[0];
 
-        let server_parts: Vec<&str> = server_export.splitn(2, ':').collect();
-        let server = server_parts
-            .first()
-            .ok_or_else(|| NfsGazeError::ParseError("Missing server in server export".to_string()))?
-            .to_string();
-        let export = server_parts
-            .get(1)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "/".to_string());
+        let (server, export) = match server_export.split_once(':') {
+            Some((s, e)) => (s.to_string(), e.to_string()),
+            None => (server_export.to_string(), "/".to_string()),
+        };
 
-        let mount = NFSMount {
+        self.current_mount = Some(NFSMount {
             device: server_export.to_string(),
             mount_point: mount_point.to_string(),
             server,
@@ -209,10 +214,7 @@ impl MountstatsParser {
             events: None,
             bytes_read: 0,
             bytes_write: 0,
-        };
-
-        self.mounts.insert(mount_point.to_string(), mount.clone());
-        self.current_mount = Some(mount);
+        });
         Ok(())
     }
 
@@ -223,16 +225,7 @@ impl MountstatsParser {
             self.parse_events_line(line)
         } else if line.starts_with("bytes:") {
             self.parse_bytes(line)
-        } else if line.contains(':')
-            && !line.starts_with("RPC")
-            && !line.starts_with("xprt")
-            && !line.starts_with("per-op")
-            && !line.starts_with("opts")
-            && !line.starts_with("caps")
-            && !line.starts_with("sec")
-            && !line.starts_with("nfsv4")
-            && !line.starts_with("nfsv3")
-        {
+        } else if line.contains(':') && !IGNORED_PREFIXES.iter().any(|p| line.starts_with(p)) {
             self.parse_operation(line)
         } else {
             Ok(())
@@ -241,7 +234,7 @@ impl MountstatsParser {
 
     fn parse_age(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < MIN_AGE_FIELDS {
+        if parts.len() < MIN_KEY_VALUE_FIELDS {
             return Err(NfsGazeError::ParseError(format!(
                 "Invalid age line: {}",
                 line
@@ -249,24 +242,14 @@ impl MountstatsParser {
         }
 
         if let Some(ref mut mount) = self.current_mount {
-            mount.age = parts[1]
-                .parse()
-                .map_err(|e| NfsGazeError::FieldParseError {
-                    field: "age".to_string(),
-                    source: e,
-                })?;
-
-            // Update in mounts map
-            if let Some(existing_mount) = self.mounts.get_mut(&mount.mount_point) {
-                existing_mount.age = mount.age;
-            }
+            mount.age = parse_field(parts[1], "age")?;
         }
         Ok(())
     }
 
     fn parse_events_line(&mut self, line: &str) -> Result<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < MIN_AGE_FIELDS {
+        if parts.len() < MIN_KEY_VALUE_FIELDS {
             return Err(NfsGazeError::ParseError(format!(
                 "Invalid events line: {}",
                 line
@@ -277,17 +260,15 @@ impl MountstatsParser {
         let events = parse_events(&event_parts)?;
 
         if let Some(ref mut mount) = self.current_mount {
-            mount.events = Some(events.clone());
-
-            // Update in mounts map
-            if let Some(existing_mount) = self.mounts.get_mut(&mount.mount_point) {
-                existing_mount.events = Some(events);
-            }
+            mount.events = Some(events);
         }
         Ok(())
     }
 
     fn parse_bytes(&mut self, line: &str) -> Result<()> {
+        // Kernel format: "bytes: normalread normalwrite directread directwrite serverread serverwrite pagesread pageswrite"
+        // Index:              1          2           3            4          5           6          7          8
+        // bytes_read = index 1 (normalread), bytes_write = index 6 (serverwrite)
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < MIN_BYTES_FIELDS {
             return Err(NfsGazeError::ParseError(format!(
@@ -297,61 +278,22 @@ impl MountstatsParser {
         }
 
         if let Some(ref mut mount) = self.current_mount {
-            mount.bytes_read = parts[1]
-                .parse()
-                .map_err(|e| NfsGazeError::FieldParseError {
-                    field: "bytes_read".to_string(),
-                    source: e,
-                })?;
-            // Handle different formats - try both index 5 and 6
-            mount.bytes_write = if let Some(val) = parts.get(6) {
-                if val != &"0" {
-                    val.parse().map_err(|e| NfsGazeError::FieldParseError {
-                        field: "bytes_write".to_string(),
-                        source: e,
-                    })?
-                } else if let Some(val) = parts.get(5) {
-                    val.parse().map_err(|e| NfsGazeError::FieldParseError {
-                        field: "bytes_write".to_string(),
-                        source: e,
-                    })?
-                } else {
-                    0
-                }
-            } else if let Some(val) = parts.get(5) {
-                val.parse().map_err(|e| NfsGazeError::FieldParseError {
-                    field: "bytes_write".to_string(),
-                    source: e,
-                })?
-            } else {
-                0
+            mount.bytes_read = parse_field(parts[1], "bytes_read")?;
+            mount.bytes_write = match parts.get(6) {
+                Some(val) => parse_field(val, "bytes_write")?,
+                None => 0,
             };
-
-            // Update in mounts map
-            if let Some(existing_mount) = self.mounts.get_mut(&mount.mount_point) {
-                existing_mount.bytes_read = mount.bytes_read;
-                existing_mount.bytes_write = mount.bytes_write;
-            }
         }
         Ok(())
     }
 
     fn parse_operation(&mut self, line: &str) -> Result<()> {
-        let op_parts: Vec<&str> = line.splitn(2, ':').collect();
-        if op_parts.len() != 2 {
-            return Err(NfsGazeError::ParseError(format!(
-                "Invalid operation line: {}",
-                line
-            )));
-        }
+        let (op_name, stats_str) = line
+            .split_once(':')
+            .ok_or_else(|| NfsGazeError::ParseError(format!("Invalid operation line: {}", line)))?;
 
-        let op_name = op_parts
-            .first()
-            .ok_or_else(|| NfsGazeError::ParseError("Missing operation name".to_string()))?
-            .trim();
-        let stats: Vec<String> = op_parts
-            .get(1)
-            .ok_or_else(|| NfsGazeError::ParseError("Missing operation stats".to_string()))?
+        let op_name = op_name.trim();
+        let stats: Vec<String> = stats_str
             .split_whitespace()
             .map(|s| s.to_string())
             .collect();
@@ -359,16 +301,7 @@ impl MountstatsParser {
         let operation = parse_nfs_operation(op_name, &stats)?;
 
         if let Some(ref mut mount) = self.current_mount {
-            mount
-                .operations
-                .insert(op_name.to_string(), operation.clone());
-
-            // Update in mounts map
-            if let Some(existing_mount) = self.mounts.get_mut(&mount.mount_point) {
-                existing_mount
-                    .operations
-                    .insert(op_name.to_string(), operation);
-            }
+            mount.operations.insert(op_name.to_string(), operation);
         }
         Ok(())
     }
@@ -383,7 +316,7 @@ pub fn parse_mountstats(path: &str) -> Result<HashMap<String, NFSMount>> {
 /// Parse mountstats from a reader (for testing)
 pub fn parse_mountstats_reader<R: Read>(reader: R) -> Result<HashMap<String, NFSMount>> {
     let buf_reader = BufReader::new(reader);
-    let mut parser = MountstatsParser::new();
+    let parser = MountstatsParser::new();
     parser.parse(buf_reader)
 }
 
@@ -527,5 +460,66 @@ WRITE: 20 20 0 300 400 2 3 4 0
         let mount2 = &mounts["/mnt/nfs2"];
         assert_eq!(mount2.age, 2000);
         assert!(mount2.operations.contains_key("WRITE"));
+    }
+
+    #[test]
+    fn test_parse_bytes_short_line_defaults_write_to_zero() {
+        // bytes line with only 6 fields (no index 6) — bytes_write should default to 0
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+bytes: 1048576 0 0 0 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        let mount = &mounts["/mnt/nfs"];
+        assert_eq!(mount.bytes_read, 1048576);
+        assert_eq!(mount.bytes_write, 0);
+    }
+
+    #[test]
+    fn test_ignored_prefixes_are_skipped() {
+        // Real mountstats contain RPC, xprt, opts, caps, sec lines that should be skipped
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs4 statvers=1.1
+        opts:   rw,vers=4.2,rsize=1048576,wsize=1048576
+        age:    500
+        caps:   caps=0x3ffdf,wtmult=512,dtsize=32768
+        sec:    flavor=1,pseudoflavor=1
+        RPC: some rpc stats here
+        xprt:  tcp 771 0 1 0 0 12345 12345 0 0
+        per-op statistics
+        READ: 100 100 0 1024 2048 10 20 30 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        let mount = &mounts["/mnt/nfs"];
+        assert_eq!(mount.age, 500);
+        assert_eq!(mount.operations.len(), 1);
+        assert!(mount.operations.contains_key("READ"));
+    }
+
+    #[test]
+    fn test_parse_operation_without_errors_field() {
+        // Operations with only 8 fields (no errors) should still parse
+        let stats: Vec<String> = vec!["100", "95", "5", "1024", "2048", "10", "20", "30"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let op = parse_nfs_operation("READ", &stats).expect("Should parse without errors field");
+        assert_eq!(op.ops, 100);
+        assert_eq!(op.errors, 0);
+    }
+
+    #[test]
+    fn test_parse_device_without_colon() {
+        // Server export without colon — export should default to "/"
+        let mountstats_data = r#"device serveronly mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        let mount = &mounts["/mnt/nfs"];
+        assert_eq!(mount.server, "serveronly");
+        assert_eq!(mount.export, "/");
     }
 }
