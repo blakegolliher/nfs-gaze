@@ -14,7 +14,7 @@ async fn run_linux() -> anyhow::Result<()> {
     use clap::Parser;
     use nfs_gaze::cli::{parse_operations_filter, Args};
     use nfs_gaze::metrics::MetricsManager;
-    use nfs_gaze::monitor::Monitor;
+    use nfs_gaze::monitor::{Monitor, MonitorConfig};
     use nfs_gaze::parser::parse_mountstats;
     use std::io::stdout;
     use std::time::Duration;
@@ -91,14 +91,16 @@ async fn run_linux() -> anyhow::Result<()> {
     monitor
         .monitoring_loop(
             &mut stdout,
-            &args.mountstats_path,
-            monitor_mounts,
-            operations_filter,
-            interval,
-            args.count,
-            args.show_bandwidth,
-            args.clear_screen,
-            metrics_manager.as_ref(),
+            MonitorConfig {
+                mountstats_path: &args.mountstats_path,
+                monitor_mounts,
+                operations_filter,
+                interval,
+                count: args.count,
+                show_bandwidth: args.show_bandwidth,
+                clear_screen: args.clear_screen,
+                metrics_manager: metrics_manager.as_ref(),
+            },
         )
         .map_err(|e| anyhow::anyhow!("Monitoring error: {}", e))?;
 

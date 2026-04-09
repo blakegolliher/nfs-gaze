@@ -18,6 +18,21 @@ use std::time::{Duration, Instant};
 /// interval.
 const MAX_CONSECUTIVE_PARSE_FAILURES: u32 = 10;
 
+/// Configuration for the monitoring loop.
+///
+/// Collected into a struct so `monitoring_loop` can be called with a
+/// single argument instead of a long positional list.
+pub struct MonitorConfig<'a> {
+    pub mountstats_path: &'a str,
+    pub monitor_mounts: Vec<NFSMount>,
+    pub operations_filter: HashSet<String>,
+    pub interval: Duration,
+    pub count: usize,
+    pub show_bandwidth: bool,
+    pub clear_screen: bool,
+    pub metrics_manager: Option<&'a crate::metrics::MetricsManager>,
+}
+
 /// Main monitoring structure
 pub struct Monitor {
     pub running: Arc<AtomicBool>,
@@ -88,19 +103,22 @@ impl Monitor {
     }
 
     /// Main monitoring loop
-    #[allow(clippy::too_many_arguments)]
     pub fn monitoring_loop<W: Write>(
         &self,
         writer: &mut W,
-        mountstats_path: &str,
-        monitor_mounts: Vec<NFSMount>,
-        operations_filter: HashSet<String>,
-        interval: Duration,
-        count: usize,
-        show_bandwidth: bool,
-        clear_screen: bool,
-        metrics_manager: Option<&crate::metrics::MetricsManager>,
+        config: MonitorConfig<'_>,
     ) -> Result<()> {
+        let MonitorConfig {
+            mountstats_path,
+            monitor_mounts,
+            operations_filter,
+            interval,
+            count,
+            show_bandwidth,
+            clear_screen,
+            metrics_manager,
+        } = config;
+
         let mut previous_mounts: HashMap<String, NFSMount> = monitor_mounts
             .iter()
             .map(|m| (m.mount_point.clone(), m.clone()))
@@ -291,16 +309,18 @@ mod tests {
         let monitor = Monitor::new();
         let result = monitor.monitoring_loop(
             &mut Vec::<u8>::new(),
-            "/definitely/not/a/real/path/mountstats",
-            vec![],
-            HashSet::new(),
-            Duration::from_millis(1),
-            // count=0 means "infinite iterations"; we rely on the
-            // breaker to terminate, not the count limit.
-            0,
-            false,
-            false,
-            None,
+            MonitorConfig {
+                mountstats_path: "/definitely/not/a/real/path/mountstats",
+                monitor_mounts: vec![],
+                operations_filter: HashSet::new(),
+                interval: Duration::from_millis(1),
+                // count=0 means "infinite iterations"; we rely on the
+                // breaker to terminate, not the count limit.
+                count: 0,
+                show_bandwidth: false,
+                clear_screen: false,
+                metrics_manager: None,
+            },
         );
 
         let err = result.expect_err("expected the monitoring loop to bail out");
