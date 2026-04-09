@@ -2,33 +2,6 @@ use chrono::{TimeZone, Utc};
 use nfs_gaze::display::display_stats_simple;
 use nfs_gaze::{DeltaStats, NFSMount};
 use std::collections::HashMap;
-use std::io::{self, Write};
-
-// Mock writer to capture output instead of writing to stdout
-struct MockWriter {
-    pub buffer: Vec<u8>,
-}
-
-impl MockWriter {
-    fn new() -> Self {
-        Self { buffer: Vec::new() }
-    }
-
-    fn output(&self) -> String {
-        String::from_utf8(self.buffer.clone()).unwrap()
-    }
-}
-
-impl Write for MockWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.buffer.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 
 #[test]
 fn test_display_stats_simple_without_bandwidth() {
@@ -84,10 +57,10 @@ fn test_display_stats_simple_without_bandwidth() {
     ];
 
     let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-    let mut writer = MockWriter::new();
+    let mut buf = Vec::new();
 
-    display_stats_simple(&mut writer, &mount, &stats, false, &timestamp).unwrap();
-    let output = writer.output();
+    display_stats_simple(&mut buf, &mount, &stats, false, &timestamp).unwrap();
+    let output = String::from_utf8(buf).unwrap();
 
     assert!(
         output.contains("READ"),
@@ -161,10 +134,10 @@ fn test_display_stats_simple_with_bandwidth() {
     ];
 
     let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-    let mut writer = MockWriter::new();
+    let mut buf = Vec::new();
 
-    display_stats_simple(&mut writer, &mount, &stats, true, &timestamp).unwrap();
-    let output = writer.output();
+    display_stats_simple(&mut buf, &mount, &stats, true, &timestamp).unwrap();
+    let output = String::from_utf8(buf).unwrap();
 
     assert!(
         output.contains("READ"),
@@ -200,10 +173,10 @@ fn test_display_stats_simple_empty_stats() {
 
     let stats: Vec<DeltaStats> = vec![];
     let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-    let mut writer = MockWriter::new();
+    let mut buf = Vec::new();
 
-    display_stats_simple(&mut writer, &mount, &stats, false, &timestamp).unwrap();
-    let output = writer.output();
+    display_stats_simple(&mut buf, &mount, &stats, false, &timestamp).unwrap();
+    let output = String::from_utf8(buf).unwrap();
 
     // Should have minimal output for empty stats
     assert!(
@@ -216,12 +189,13 @@ fn test_display_stats_simple_empty_stats() {
 fn test_format_duration() {
     use nfs_gaze::display::format_duration;
 
-    assert_eq!(format_duration(0), "0.000μs");
-    assert_eq!(format_duration(500), "500.000μs");
-    assert_eq!(format_duration(999), "999.000μs");
-    assert_eq!(format_duration(1000), "1.000ms");
-    assert_eq!(format_duration(1500), "1.500ms");
-    assert_eq!(format_duration(10000), "10.000ms");
+    assert_eq!(format_duration(0.0), "0.00ms");
+    assert_eq!(format_duration(0.5), "500.00μs");
+    assert_eq!(format_duration(0.001), "1.00μs");
+    assert_eq!(format_duration(1.0), "1.00ms");
+    assert_eq!(format_duration(144.5), "144.50ms");
+    assert_eq!(format_duration(999.0), "999.00ms");
+    assert_eq!(format_duration(1500.0), "1.50s");
 }
 
 #[test]

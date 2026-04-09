@@ -14,7 +14,6 @@ pub fn display_stats_simple<W: Write>(
         return Ok(());
     }
 
-    // Write header information
     writeln!(writer, "{} mounted on {}", mount.device, mount.mount_point)?;
     writeln!(
         writer,
@@ -23,69 +22,60 @@ pub fn display_stats_simple<W: Write>(
     )?;
     writeln!(writer)?;
 
-    // Write table headers
-    if show_bandwidth {
-        writeln!(
-            writer,
-            "{:<12} {:>8} {:>10} {:>10} {:>8} {:>8} {:>8}",
-            "OP", "IOPS", "RTT", "EXE", "MB/s", "KB/op", "ERRORS"
-        )?;
+    // Common columns + optional bandwidth columns
+    let bw_cols: &[&str] = if show_bandwidth {
+        &["MB/s", "KB/op"]
     } else {
-        writeln!(
-            writer,
-            "{:<12} {:>8} {:>10} {:>10} {:>8}",
-            "OP", "IOPS", "RTT", "EXE", "ERRORS"
-        )?;
+        &[]
+    };
+    write!(
+        writer,
+        "{:<12} {:>8} {:>10} {:>10}",
+        "OP", "IOPS", "RTT", "EXE"
+    )?;
+    for col in bw_cols {
+        write!(writer, " {:>8}", col)?;
     }
+    writeln!(writer, " {:>8}", "ERRORS")?;
 
-    // Write separator line
-    if show_bandwidth {
-        writeln!(writer, "{}", "-".repeat(76))?;
-    } else {
-        writeln!(writer, "{}", "-".repeat(52))?;
-    }
+    let width = if show_bandwidth { 76 } else { 52 };
+    writeln!(writer, "{}", "-".repeat(width))?;
 
-    // Write data rows
     for stat in stats {
+        write!(
+            writer,
+            "{:<12} {:>8} {:>10} {:>10}",
+            stat.operation,
+            format_rate(stat.iops),
+            format_duration(stat.avg_rtt),
+            format_duration(stat.avg_exec),
+        )?;
         if show_bandwidth {
-            writeln!(
+            write!(
                 writer,
-                "{:<12} {:>8} {:>10} {:>10} {:>8} {:>8} {:>8}",
-                stat.operation,
-                format_rate(stat.iops),
-                format_duration(stat.avg_rtt as i64),
-                format_duration(stat.avg_exec as i64),
+                " {:>8} {:>8}",
                 format_bandwidth(stat.kb_per_sec),
                 format_rate(stat.kb_per_op),
-                stat.delta_errors
-            )?;
-        } else {
-            writeln!(
-                writer,
-                "{:<12} {:>8} {:>10} {:>10} {:>8}",
-                stat.operation,
-                format_rate(stat.iops),
-                format_duration(stat.avg_rtt as i64),
-                format_duration(stat.avg_exec as i64),
-                stat.delta_errors
             )?;
         }
+        writeln!(writer, " {:>8}", stat.delta_errors)?;
     }
 
     writeln!(writer)?;
     Ok(())
 }
 
-/// Format duration with automatic unit selection (microseconds or milliseconds)
-pub fn format_duration(us: i64) -> String {
-    if us == 0 {
-        "0.000μs".to_string()
-    } else if us < 1000 {
-        // Display in microseconds for values less than 1ms with 3 decimal places
-        format!("{:.3}μs", us as f64)
+/// Format duration with automatic unit selection.
+/// Input is in milliseconds (as reported by Linux mountstats via ktime_to_ms).
+pub fn format_duration(ms: f64) -> String {
+    if ms == 0.0 {
+        "0.00ms".to_string()
+    } else if ms < 1.0 {
+        format!("{:.2}μs", ms * 1000.0)
+    } else if ms < 1000.0 {
+        format!("{:.2}ms", ms)
     } else {
-        // Display in milliseconds for values >= 1ms with 3 decimal places
-        format!("{:.3}ms", us as f64 / 1000.0)
+        format!("{:.2}s", ms / 1000.0)
     }
 }
 
@@ -115,31 +105,6 @@ mod tests {
     use chrono::TimeZone;
     use std::collections::HashMap;
 
-    struct MockWriter {
-        pub buffer: Vec<u8>,
-    }
-
-    impl MockWriter {
-        fn new() -> Self {
-            Self { buffer: Vec::new() }
-        }
-
-        fn output(&self) -> String {
-            String::from_utf8(self.buffer.clone()).unwrap()
-        }
-    }
-
-    impl Write for MockWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.buffer.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     #[test]
     fn test_display_stats_empty() {
         let mount = NFSMount {
@@ -156,22 +121,22 @@ mod tests {
 
         let stats = vec![];
         let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-        let mut writer = MockWriter::new();
+        let mut buf = Vec::new();
 
-        display_stats_simple(&mut writer, &mount, &stats, false, &timestamp).unwrap();
-        let output = writer.output();
+        display_stats_simple(&mut buf, &mount, &stats, false, &timestamp).unwrap();
 
-        assert!(output.is_empty());
+        assert!(buf.is_empty());
     }
 
     #[test]
     fn test_format_duration() {
-        assert_eq!(format_duration(0), "0.000μs");
-        assert_eq!(format_duration(500), "500.000μs");
-        assert_eq!(format_duration(999), "999.000μs");
-        assert_eq!(format_duration(1000), "1.000ms");
-        assert_eq!(format_duration(1500), "1.500ms");
-        assert_eq!(format_duration(10000), "10.000ms");
+        assert_eq!(format_duration(0.0), "0.00ms");
+        assert_eq!(format_duration(0.5), "500.00μs");
+        assert_eq!(format_duration(0.001), "1.00μs");
+        assert_eq!(format_duration(1.0), "1.00ms");
+        assert_eq!(format_duration(144.5), "144.50ms");
+        assert_eq!(format_duration(999.0), "999.00ms");
+        assert_eq!(format_duration(1500.0), "1.50s");
     }
 
     #[test]
