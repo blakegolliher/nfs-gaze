@@ -99,6 +99,7 @@ async fn run_linux() -> anyhow::Result<()> {
                 interval,
                 count: args.count,
                 duration,
+                output: args.output.clone(),
                 show_bandwidth: args.show_bandwidth,
                 clear_screen: args.clear_screen,
                 metrics_manager: metrics_manager.as_ref(),

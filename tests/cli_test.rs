@@ -38,6 +38,15 @@ fn test_cli_duration_and_count_are_mutually_exclusive() {
 }
 
 #[test]
+fn test_cli_with_output() {
+    use std::path::PathBuf;
+    let args = Args::try_parse_from(["nfs-gaze", "-d", "5", "-o", "/tmp/report.json"])
+        .expect("should accept -o with a path");
+    assert_eq!(args.output, Some(PathBuf::from("/tmp/report.json")));
+    assert_eq!(args.duration, Some(5));
+}
+
+#[test]
 fn test_cli_with_mount_point() {
     let args = Args::try_parse_from(["nfs-gaze", "-m", "/mnt/nfs"])
         .expect("Should parse with mount point");

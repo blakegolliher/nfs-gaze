@@ -17,6 +17,22 @@ pub enum NfsGazeError {
         #[source]
         source: std::num::ParseIntError,
     },
+    /// Failure creating or writing the output report file. Kept
+    /// distinct from [`MountstatsRead`] so "tool could not read its
+    /// own input" and "tool could not write its own output" surface
+    /// as different diagnostics in logs.
+    #[error("Failed to write report to {path}: {source}")]
+    ReportWrite {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// Failure inside `serde_json` while encoding the report. In
+    /// practice this is nearly impossible for the current schema
+    /// (all fields are trivially serialisable) but is surfaced
+    /// explicitly so future schema changes cannot swallow the error.
+    #[error("Failed to serialise report: {0}")]
+    ReportSerialize(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, NfsGazeError>;

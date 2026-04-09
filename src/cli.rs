@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "nfs-gaze")]
@@ -44,6 +45,12 @@ pub struct Args {
     /// Total capture duration in seconds (mutually exclusive with --count)
     #[arg(short = 'd', long, conflicts_with = "count")]
     pub duration: Option<u64>,
+
+    /// Write a JSON snapshot report to this path at end of session.
+    /// Suppresses the live per-interval table and replaces it with a
+    /// `Sampling...` progress line on stderr.
+    #[arg(short = 'o', long)]
+    pub output: Option<PathBuf>,
 
     /// Show bandwidth statistics
     #[arg(long = "bw")]

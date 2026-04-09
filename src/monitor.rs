@@ -1,11 +1,13 @@
 use crate::display::display_stats_simple;
 use crate::parser::parse_mountstats;
+use crate::snapshot::{MountAggregator, MountReport, Report, CURRENT_SCHEMA_VERSION};
 use crate::stats::{calculate_delta_stats, filter_operations};
 use crate::types::{NFSMount, NfsGazeError, Result};
 use chrono::Utc;
 use signal_hook::{consts::SIGINT, consts::SIGTERM, iterator::Signals};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -35,6 +37,11 @@ pub struct MonitorConfig<'a> {
     /// When `Some`, the loop exits once `Instant::now()` crosses the
     /// start instant plus this `Duration`.
     pub duration: Option<Duration>,
+    /// When `Some`, aggregate each interval's deltas into a
+    /// [`Report`] and write it to this path at end of session. In
+    /// this mode the live per-interval table is suppressed and the
+    /// loop prints a `Sampling...` progress line to stderr instead.
+    pub output: Option<PathBuf>,
     pub show_bandwidth: bool,
     pub clear_screen: bool,
     pub metrics_manager: Option<&'a crate::metrics::MetricsManager>,
@@ -122,6 +129,7 @@ impl Monitor {
             interval,
             count,
             duration,
+            output,
             show_bandwidth,
             clear_screen,
             metrics_manager,
@@ -131,6 +139,32 @@ impl Monitor {
             .iter()
             .map(|m| (m.mount_point.clone(), m.clone()))
             .collect();
+
+        // When -o is in play, allocate one aggregator per monitored
+        // mount up-front. We key on mount_point to match how
+        // `previous_mounts` is keyed, so lookups during the loop are
+        // direct. Mounts that appear mid-run are ignored for
+        // aggregation purposes — matching nfs-monitor, which locks in
+        // the target set at session start.
+        let output_mode = output.is_some();
+        let mut aggregators: HashMap<String, MountAggregator> = if output_mode {
+            monitor_mounts
+                .iter()
+                .map(|m| {
+                    (
+                        m.mount_point.clone(),
+                        // fstype and options are not yet recovered by
+                        // the parser; pass empty strings for now. A
+                        // follow-up parser change can populate them
+                        // without touching this call site.
+                        MountAggregator::new(m, String::new(), String::new()),
+                    )
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let mut samples_collected: u64 = 0;
 
         let mut iteration = 0;
         let loop_start = Instant::now();
@@ -206,8 +240,10 @@ impl Monitor {
                 continue;
             }
 
-            // Clear screen if requested
-            if clear_screen {
+            // Clear screen if requested — never in output mode, since
+            // it would clobber the progress line on stderr and blank
+            // the terminal in the middle of a silent capture.
+            if clear_screen && !output_mode {
                 write!(writer, "\x1B[2J\x1B[1;1H")?;
             }
 
@@ -223,17 +259,28 @@ impl Monitor {
                     // Filter operations if specified
                     delta_stats = filter_operations(delta_stats, &operations_filter);
 
-                    // Display stats if we have any
+                    // Either aggregate for the end-of-session report
+                    // or render the live table — never both, because
+                    // output mode is intended as a silent capture.
                     if !delta_stats.is_empty() {
-                        display_stats_simple(
-                            writer,
-                            current_mount,
-                            &delta_stats,
-                            show_bandwidth,
-                            &timestamp,
-                        )?;
+                        if output_mode {
+                            if let Some(agg) = aggregators.get_mut(&current_mount.mount_point) {
+                                agg.record(&delta_stats);
+                            }
+                        } else {
+                            display_stats_simple(
+                                writer,
+                                current_mount,
+                                &delta_stats,
+                                show_bandwidth,
+                                &timestamp,
+                            )?;
+                        }
 
-                        // Export metrics if enabled
+                        // Prometheus metrics export is orthogonal to
+                        // on-disk reports; keep exporting in both
+                        // modes so long-running scrapers don't go
+                        // blind during an -o session.
                         if let Some(manager) = metrics_manager {
                             manager.export_metrics(current_mount, &delta_stats);
                         }
@@ -244,7 +291,65 @@ impl Monitor {
                 previous_mounts.insert(current_mount.mount_point.clone(), current_mount.clone());
             }
 
+            if output_mode {
+                samples_collected += 1;
+                let elapsed_secs = loop_start.elapsed().as_secs();
+                // Carriage return without newline so each update
+                // overwrites the previous progress line. Flush
+                // explicitly because stderr is line-buffered when
+                // attached to a TTY and otherwise block-buffered.
+                eprint!(
+                    "\r  Sampling... {}s  ({} samples)",
+                    elapsed_secs, samples_collected
+                );
+                let _ = io::stderr().flush();
+            }
+
             iteration += 1;
+        }
+
+        // Terminate the progress line with a newline so whatever
+        // prints next (error, final "wrote report" note, shell
+        // prompt) starts on a fresh line.
+        if output_mode {
+            eprintln!();
+        }
+
+        // Fold aggregators into a Report and write the JSON file.
+        // Done here rather than in main so that the samples/duration
+        // metadata stays consistent with the loop state that produced
+        // it — main.rs never sees `samples_collected` or `loop_start`.
+        if let Some(output_path) = output {
+            let interval_sec = interval.as_secs();
+            let duration_sec = duration
+                .map(|d| d.as_secs())
+                .unwrap_or_else(|| loop_start.elapsed().as_secs());
+
+            let mut mount_reports: Vec<MountReport> = aggregators
+                .into_values()
+                .map(|agg| agg.finalise(duration_sec))
+                .collect();
+            // Sort by device for deterministic output across runs on
+            // the same host; HashMap iteration order is otherwise
+            // random and would make diffs noisy.
+            mount_reports.sort_by(|a, b| a.device.cmp(&b.device));
+
+            let report = Report {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                generated_at: Utc::now(),
+                duration_sec,
+                interval_sec,
+                samples: samples_collected,
+                mounts: mount_reports,
+            };
+
+            let file =
+                std::fs::File::create(&output_path).map_err(|e| NfsGazeError::ReportWrite {
+                    path: output_path.display().to_string(),
+                    source: e,
+                })?;
+            serde_json::to_writer_pretty(file, &report)?;
+            eprintln!("Wrote JSON report to {}", output_path.display());
         }
 
         Ok(())
@@ -341,6 +446,7 @@ mod tests {
                 // breaker to terminate, not the count limit.
                 count: 0,
                 duration: None,
+                output: None,
                 show_bandwidth: false,
                 clear_screen: false,
                 metrics_manager: None,
@@ -388,6 +494,7 @@ mod tests {
                 interval: Duration::from_millis(20),
                 count: 0,
                 duration: Some(target),
+                output: None,
                 show_bandwidth: false,
                 clear_screen: false,
                 metrics_manager: None,
@@ -407,6 +514,55 @@ mod tests {
             "loop ran far longer than its deadline: {:?} vs target {:?}",
             elapsed,
             target
+        );
+    }
+
+    #[test]
+    fn test_monitoring_loop_writes_report_in_output_mode() {
+        use tempfile::TempDir;
+
+        // Arrange a temp directory holding both an empty mountstats
+        // file (so parsing succeeds with zero mounts) and the path
+        // the loop should write its JSON report to.
+        let dir = TempDir::new().expect("create tempdir");
+        let mountstats_path = dir.path().join("mountstats");
+        std::fs::write(&mountstats_path, "").expect("write empty mountstats");
+        let output_path = dir.path().join("report.json");
+
+        let monitor = Monitor::new();
+        let result = monitor.monitoring_loop(
+            &mut Vec::<u8>::new(),
+            MonitorConfig {
+                mountstats_path: mountstats_path.to_str().expect("utf-8 path"),
+                monitor_mounts: vec![],
+                operations_filter: HashSet::new(),
+                interval: Duration::from_millis(10),
+                count: 0,
+                // Short-lived session so the test is fast; the
+                // deadline is the only reason the loop terminates.
+                duration: Some(Duration::from_millis(80)),
+                output: Some(output_path.clone()),
+                show_bandwidth: false,
+                clear_screen: false,
+                metrics_manager: None,
+            },
+        );
+        result.expect("loop should exit cleanly under duration");
+
+        // The file must exist and round-trip through the Report
+        // deserialiser. We do not assert samples/duration_sec
+        // because both are sub-second and would round to zero.
+        let json = std::fs::read_to_string(&output_path).expect("read report file");
+        let report: crate::snapshot::Report =
+            serde_json::from_str(&json).expect("report must be valid JSON");
+        assert_eq!(
+            report.schema_version,
+            crate::snapshot::CURRENT_SCHEMA_VERSION
+        );
+        assert!(
+            report.mounts.is_empty(),
+            "no monitor_mounts passed → no MountReports expected, got {:?}",
+            report.mounts
         );
     }
 
