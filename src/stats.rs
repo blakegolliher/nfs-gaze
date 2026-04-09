@@ -1,5 +1,13 @@
 use crate::types::{DeltaStats, NFSMount, NFSOperation};
 
+fn safe_div(numerator: f64, denominator: f64) -> f64 {
+    if denominator > 0.0 {
+        numerator / denominator
+    } else {
+        0.0
+    }
+}
+
 /// Calculate delta statistics between two measurements.
 ///
 /// Operations whose monotonic counters have moved backwards since the
@@ -87,42 +95,14 @@ fn calculate_operation_delta(
     let delta_errors = current.errors - previous.errors;
     let delta_retrans = current.timeouts - previous.timeouts;
 
-    // Calculate averages and rates
-    let iops = if elapsed_seconds > 0.0 {
-        delta_ops as f64 / elapsed_seconds
-    } else {
-        0.0
-    };
-
-    let avg_rtt = if delta_ops > 0 {
-        delta_rtt as f64 / delta_ops as f64
-    } else {
-        0.0
-    };
-
-    let avg_exec = if delta_ops > 0 {
-        delta_exec as f64 / delta_ops as f64
-    } else {
-        0.0
-    };
-
-    let avg_queue = if delta_ops > 0 {
-        delta_queue as f64 / delta_ops as f64
-    } else {
-        0.0
-    };
-
-    let kb_per_op = if delta_ops > 0 {
-        (delta_bytes as f64 / 1024.0) / delta_ops as f64
-    } else {
-        0.0
-    };
-
-    let kb_per_sec = if elapsed_seconds > 0.0 {
-        (delta_bytes as f64 / 1024.0) / elapsed_seconds
-    } else {
-        0.0
-    };
+    let ops_f = delta_ops as f64;
+    let iops = safe_div(ops_f, elapsed_seconds);
+    let avg_rtt = safe_div(delta_rtt as f64, ops_f);
+    let avg_exec = safe_div(delta_exec as f64, ops_f);
+    let avg_queue = safe_div(delta_queue as f64, ops_f);
+    let kb_total = delta_bytes as f64 / 1024.0;
+    let kb_per_op = safe_div(kb_total, ops_f);
+    let kb_per_sec = safe_div(kb_total, elapsed_seconds);
 
     Some(DeltaStats {
         operation: current.name.clone(),
@@ -326,5 +306,56 @@ mod tests {
         let filtered = filter_operations(stats, &filter);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].operation, "READ");
+    }
+
+    #[test]
+    fn test_calculate_delta_stats_zero_ops() {
+        // When delta_ops is 0, the operation should be filtered out
+        // entirely (delta_ops == 0 means no activity this interval).
+        let mut prev_ops = HashMap::new();
+        prev_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 100, 1024, 2048, 1000, 2000),
+        );
+
+        // Current ops unchanged — delta_ops = 0
+        let curr_ops = prev_ops.clone();
+
+        let previous = create_test_mount_with_operations(prev_ops);
+        let current = create_test_mount_with_operations(curr_ops);
+
+        let deltas = calculate_delta_stats(&previous, &current, 1.0);
+
+        assert_eq!(deltas.len(), 0);
+    }
+
+    #[test]
+    fn test_calculate_delta_stats_zero_elapsed() {
+        // elapsed_seconds = 0 must not panic. Rates (iops, kb_per_sec)
+        // should be 0.0 because safe_div rejects a zero denominator,
+        // while per-op averages (avg_rtt) are still well-defined since
+        // their denominator is delta_ops, not elapsed_seconds.
+        let mut prev_ops = HashMap::new();
+        prev_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 100, 1024, 2048, 1000, 2000),
+        );
+
+        let mut curr_ops = HashMap::new();
+        curr_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 200, 2048, 4096, 2000, 4000),
+        );
+
+        let previous = create_test_mount_with_operations(prev_ops);
+        let current = create_test_mount_with_operations(curr_ops);
+
+        let deltas = calculate_delta_stats(&previous, &current, 0.0);
+
+        assert_eq!(deltas.len(), 1);
+        let delta = &deltas[0];
+        assert_eq!(delta.iops, 0.0);
+        assert_eq!(delta.kb_per_sec, 0.0);
+        assert!(delta.avg_rtt > 0.0);
     }
 }
