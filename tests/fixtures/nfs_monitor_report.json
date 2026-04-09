@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-03-25T11:00:00Z",
+  "duration_sec": 180,
+  "interval_sec": 1,
+  "samples": 180,
+  "mounts": [
+    {
+      "device": "server02:/export/data",
+      "mountpoint": "/mnt/nfs1",
+      "fstype": "nfs4",
+      "options": "rw,vers=4.1,proto=tcp,hard,rsize=1048576,wsize=1048576",
+      "summary": {
+        "total_ops": 52890,
+        "ops_per_sec": 293.8,
+        "retransmissions": 3,
+        "timeouts": 0,
+        "errors": 0
+      },
+      "operations": [
+        {
+          "name": "READ",
+          "ops": 34200,
+          "ops_per_sec": 190.0,
+          "retransmissions": 1,
+          "timeouts": 0,
+          "errors": 0,
+          "rtt_avg_ms": 0.72,
+          "rtt_min_ms": 0.22,
+          "rtt_max_ms": 4.10
+        },
+        {
+          "name": "WRITE",
+          "ops": 9450,
+          "ops_per_sec": 52.5,
+          "retransmissions": 2,
+          "timeouts": 0,
+          "errors": 0,
+          "rtt_avg_ms": 1.40,
+          "rtt_min_ms": 0.60,
+          "rtt_max_ms": 7.80
+        },
+        {
+          "name": "GETATTR",
+          "ops": 5980,
+          "ops_per_sec": 33.2,
+          "retransmissions": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "rtt_avg_ms": 0.30,
+          "rtt_min_ms": 0.10,
+          "rtt_max_ms": 1.80
+        },
+        {
+          "name": "ACCESS",
+          "ops": 1910,
+          "ops_per_sec": 10.6,
+          "retransmissions": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "rtt_avg_ms": 0.25,
+          "rtt_min_ms": 0.08,
+          "rtt_max_ms": 1.50
+        },
+        {
+          "name": "LOOKUP",
+          "ops": 980,
+          "ops_per_sec": 5.4,
+          "retransmissions": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "rtt_avg_ms": 0.35,
+          "rtt_min_ms": 0.12,
+          "rtt_max_ms": 2.90
+        },
+        {
+          "name": "OPEN",
+          "ops": 210,
+          "ops_per_sec": 1.2,
+          "retransmissions": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "rtt_avg_ms": 0.65,
+          "rtt_min_ms": 0.28,
+          "rtt_max_ms": 3.10
+        },
+        {
+          "name": "CLOSE",
+          "ops": 160,
+          "ops_per_sec": 0.9,
+          "retransmissions": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "rtt_avg_ms": 0.50,
+          "rtt_min_ms": 0.18,
+          "rtt_max_ms": 2.20
+        }
+      ]
+    }
+  ]
+}
