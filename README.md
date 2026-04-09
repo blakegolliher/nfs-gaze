@@ -9,6 +9,7 @@ Real-time NFS performance monitoring with per-operation latency tracking. Monito
 - **Real-Time Monitoring**: Live updates with configurable intervals
 - **Operation Filtering**: Focus on specific NFS operations that matter to you
 - **Clear Output Format**: Detailed performance metrics in an easy-to-read display
+- **JSON Snapshots & Compare**: Capture a fixed-duration session to JSON and diff two captures side by side
 - **Memory Safe**: Built with Rust for zero memory leaks and thread safety
 - **High Performance**: Optimized for minimal overhead monitoring
 - **Observability Ready**: Optional Prometheus metrics export
@@ -151,12 +152,42 @@ When applications are slow, identify if NFS is the bottleneck:
 Use during benchmarks to understand NFS behavior:
 
 ```bash
-# Monitor during a test with specific duration
-./nfs-gaze -m /mnt/nfs -i 1 -c 60  # Monitor for 60 seconds
+# Monitor for a fixed wall-clock duration (seconds)
+./nfs-gaze -m /mnt/nfs -d 300
+
+# Or by iteration count (mutually exclusive with --duration)
+./nfs-gaze -m /mnt/nfs -i 1 -c 60
 
 # Clear screen between updates for easy reading
 ./nfs-gaze -m /mnt/nfs --clear
 ```
+
+### JSON Snapshots and Comparing Runs
+
+Capture a session to disk for later analysis, or to diff against a
+future run. When `-o` is set the live table is suppressed and a
+`Sampling...` progress line is printed to stderr instead; the JSON
+report is written at the end of the session.
+
+```bash
+# Capture a 5-minute baseline to disk
+./nfs-gaze -m /mnt/nfs -d 300 -o baseline.json
+
+# Capture a second run after a change
+./nfs-gaze -m /mnt/nfs -d 300 -o new-run.json
+
+# Compare the two captures side by side
+./nfs-gaze compare baseline.json new-run.json BASELINE NEW
+```
+
+The labels (`BASELINE`, `NEW`) are optional; if omitted, the reports
+are labelled `File1` and `File2`. Each report must contain at least
+one mount; if a report contains multiple mounts only the first is
+compared (a note is printed on stderr).
+
+The JSON schema intentionally matches the schema used by the legacy
+`nfs-monitor` Go tool, so reports produced before cutover remain
+compatible with `nfs-gaze compare`.
 
 ## Command-Line Options
 
@@ -165,11 +196,19 @@ Use during benchmarks to understand NFS behavior:
 | `-m` | `--mount-point` | | Mount point to monitor (monitors all if not specified) |
 | | `--ops` | | Comma-separated list of operations to monitor |
 | `-i` | `--interval` | 1 | Update interval in seconds |
-| `-c` | `--count` | 0 | Number of iterations (0 = infinite) |
+| `-c` | `--count` | 0 | Number of iterations (0 = infinite; mutually exclusive with `-d`) |
+| `-d` | `--duration` | | Total capture duration in seconds (mutually exclusive with `-c`) |
+| `-o` | `--output` | | Write a JSON snapshot report to this path at end of session (suppresses live table) |
 | | `--bw` | false | Show bandwidth statistics |
 | | `--clear` | false | Clear screen between iterations |
 | `-f` | `--mountstats-path` | /proc/self/mountstats | Path to mountstats file |
 | | `--metrics-interval` | 10 | Metrics export interval in seconds |
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `compare <file1> <file2> [label1] [label2]` | Compare two nfs-gaze JSON snapshot reports side by side |
 
 When built with the `prometheus` feature, the following flags are also available:
 
@@ -235,8 +274,8 @@ Common operations you can monitor:
 # Single measurement for monitoring systems
 ./nfs-gaze -m /mnt/nfs -c 1
 
-# JSON output (future enhancement)
-./nfs-gaze -m /mnt/nfs --format json
+# JSON snapshot for downstream tooling (e.g. nfs-gaze compare, jq, etc.)
+./nfs-gaze -m /mnt/nfs -d 60 -o /tmp/snapshot.json
 ```
 
 ## Building from Source
