@@ -1,64 +1,149 @@
-name: Release Binaries
+name: release
 
 on:
-  release:
-    types: [created, published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag to build for'
-        required: true
-        default: 'v0.0.1-beta.1'
+  push:
+    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  release:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            arch: x86_64
-          - target: aarch64-unknown-linux-gnu
-            arch: aarch64
-          - target: armv7-unknown-linux-gnueabihf
-            arch: armv7
-          - target: x86_64-unknown-linux-musl
-            arch: x86_64-musl
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross-compilation tools
+      - name: Build binary and packages on Rocky 9
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf musl-tools
+          set -euo pipefail
+          mkdir -p dist
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            -e VERSION="${REF_NAME#v}" \
+            rockylinux:9 \
+            bash -euxc '
+              dnf -y install \
+                gcc pkgconfig rpm-build binutils tar gzip make
+              curl -sSf https://sh.rustup.rs | sh -s -- -y \
+                --default-toolchain stable --profile minimal
+              source "$HOME/.cargo/env"
 
-      - name: Build binary
-        run: |
-          cargo build --release --target ${{ matrix.target }}
+              cargo build --release --features prometheus
+              strip --strip-unneeded target/release/nfs-gaze
 
-      - name: Package binary
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf nfs-gaze-${{ matrix.arch }}-linux.tar.gz nfs-gaze
-          mv nfs-gaze-${{ matrix.arch }}-linux.tar.gz ../../../
+              STAGE=$(mktemp -d)
+              mkdir -p "$STAGE/usr/local/bin"
+              mkdir -p "$STAGE/usr/local/share/doc/nfs-gaze"
+              install -m 0755 target/release/nfs-gaze "$STAGE/usr/local/bin/nfs-gaze"
+              install -m 0644 README.md "$STAGE/usr/local/share/doc/nfs-gaze/README.md"
+              install -m 0644 LICENSE   "$STAGE/usr/local/share/doc/nfs-gaze/LICENSE"
 
-      - name: Upload to release
+              # ---------- tarball ----------
+              TAR_BASE="nfs-gaze-${VERSION}-x86_64-linux"
+              ( cd "$STAGE" && tar --owner=0 --group=0 -czf "/work/dist/${TAR_BASE}.tar.gz" . )
+
+              # ---------- deb (pure ar+tar; dpkg-deb absent on Rocky) ----------
+              # Build deb before rpm: rpmbuild auto-cleans its --buildroot,
+              # which would delete $STAGE before we could read it.
+              DEB_STAGE=$(mktemp -d)
+              mkdir -p "$DEB_STAGE/DEBIAN"
+              cp -a "$STAGE/." "$DEB_STAGE/"
+              INSTALLED_SIZE=$(du -sk --apparent-size "$DEB_STAGE/usr" | cut -f1)
+              printf "%s\n" \
+                "Package: nfs-gaze" \
+                "Version: $VERSION" \
+                "Section: admin" \
+                "Priority: optional" \
+                "Architecture: amd64" \
+                "Maintainer: Blake Golliher <blakegolliher@gmail.com>" \
+                "Installed-Size: $INSTALLED_SIZE" \
+                "Depends: libc6" \
+                "Homepage: https://github.com/blakegolliher/nfs-gaze" \
+                "Description: Real-time NFS client monitor with per-op latency (no eBPF)" \
+                " nfs-gaze is a Linux NFS client monitor that reads" \
+                " /proc/self/mountstats and surfaces per-operation latency, throughput," \
+                " and IOPS in a live display. JSON snapshots and a compare subcommand" \
+                " let you diff two captures side by side. Optional Prometheus metrics" \
+                " export. No kernel modules or eBPF required." \
+                > "$DEB_STAGE/DEBIAN/control"
+              DEBTMP=$(mktemp -d)
+              printf "2.0\n" > "$DEBTMP/debian-binary"
+              ( cd "$DEB_STAGE/DEBIAN" \
+                && tar --owner=0 --group=0 --format=gnu -czf "$DEBTMP/control.tar.gz" . )
+              ( cd "$DEB_STAGE" \
+                && tar --owner=0 --group=0 --format=gnu --exclude=./DEBIAN -czf "$DEBTMP/data.tar.gz" . )
+              ( cd "$DEBTMP" \
+                && ar rc "/work/dist/nfs-gaze_${VERSION}-1_amd64.deb" debian-binary control.tar.gz data.tar.gz )
+
+              # ---------- rpm ---------- (last: rpmbuild deletes $STAGE)
+              RPMTMP=$(mktemp -d)
+              mkdir -p "$RPMTMP/rpmbuild"/{BUILD,RPMS,SRPMS,SOURCES,SPECS}
+              printf "%s\n" \
+                "Name:        nfs-gaze" \
+                "Version:     $VERSION" \
+                "Release:     1" \
+                "Summary:     Real-time NFS client monitor with per-op latency (no eBPF)" \
+                "License:     MIT OR Apache-2.0" \
+                "URL:         https://github.com/blakegolliher/nfs-gaze" \
+                "BuildArch:   x86_64" \
+                "" \
+                "%description" \
+                "nfs-gaze is a Linux NFS client monitor that reads" \
+                "/proc/self/mountstats and surfaces per-operation latency, throughput," \
+                "and IOPS in a live display. JSON snapshots and a compare subcommand" \
+                "let you diff two captures side by side. Optional Prometheus metrics" \
+                "export. No kernel modules or eBPF required." \
+                "" \
+                "%files" \
+                "%attr(0755,root,root) /usr/local/bin/nfs-gaze" \
+                "%doc /usr/local/share/doc/nfs-gaze/README.md" \
+                "%license /usr/local/share/doc/nfs-gaze/LICENSE" \
+                > "$RPMTMP/nfs-gaze.spec"
+              rpmbuild --quiet \
+                --define "_topdir $RPMTMP/rpmbuild" \
+                --define "dist %{nil}" \
+                --buildroot "$STAGE" \
+                --target x86_64 \
+                -bb "$RPMTMP/nfs-gaze.spec"
+              cp "$RPMTMP/rpmbuild/RPMS/x86_64/nfs-gaze-${VERSION}-1.x86_64.rpm" /work/dist/
+
+              ls -lh /work/dist
+            '
+
+      - name: Create GitHub Release
+        env:
+          REF_NAME: ${{ github.ref_name }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: nfs-gaze-${{ matrix.arch }}-linux.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            dist/nfs-gaze-*.tar.gz
+            dist/nfs-gaze-*.rpm
+            dist/nfs-gaze_*.deb
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            **RHEL / Rocky / Alma 9, Fedora:**
+            ```
+            sudo dnf install ./nfs-gaze-VERSION-1.x86_64.rpm
+            ```
+
+            **Ubuntu 22.04+ / Debian 12+:**
+            ```
+            sudo apt install ./nfs-gaze_VERSION-1_amd64.deb
+            ```
+
+            **Tarball (extract to /):**
+            ```
+            sudo tar -C / -xzf nfs-gaze-VERSION-x86_64-linux.tar.gz
+            ```
+
+            Replace `VERSION` with the release version above (without the leading `v`).
+
+            ## Notes
+
+            - Reads `/proc/self/mountstats` — no kernel modules, no eBPF, no root required.
+            - Built with `--features prometheus`; pass `--prometheus-port <PORT>` to expose `/metrics`.
