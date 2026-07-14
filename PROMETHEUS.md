@@ -96,24 +96,47 @@ nfs_operations_total{mount_point="/mnt/nfs",server="nfs-server",operation="READ"
 nfs_operations_total{mount_point="/mnt/nfs",server="nfs-server",operation="WRITE"} 312
 ```
 
-#### `nfs_operation_duration_seconds`
-- **Type**: Histogram
+#### `nfs_operation_rtt_seconds_total`
+- **Type**: Counter
 - **Labels**: `mount_point`, `server`, `operation`
-- **Description**: Round-trip time (RTT) of each NFS operation in
-  seconds. nfs-gaze converts the per-op `rtt` value reported by
-  `/proc/self/mountstats` from milliseconds to seconds before
-  observing.
-- **Buckets** (seconds): `0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
-  0.5, 1.0, 2.5, 5.0, 10.0`
-- **Use**: Latency percentiles per operation type, alerting on tail
-  latency.
+- **Description**: Cumulative RPC round-trip time in seconds, per
+  operation type. Sourced from the per-op `rtt` field of
+  `/proc/self/mountstats` (milliseconds, converted to seconds).
+- **Use**: Average latency over any window:
+  `rate(nfs_operation_rtt_seconds_total[5m]) / rate(nfs_operations_total[5m])`
+
+#### `nfs_operation_exec_seconds_total`
+- **Type**: Counter
+- **Labels**: `mount_point`, `server`, `operation`
+- **Description**: Cumulative operation execution time (queueing +
+  RTT) in seconds — the latency the application actually experiences.
+- **Use**: `rate(exec)/rate(ops)` for app-observed latency; compare
+  with the RTT average to see how much time is spent queued on the
+  client versus on the wire/server.
+
+#### `nfs_operation_queue_seconds_total`
+- **Type**: Counter
+- **Labels**: `mount_point`, `server`, `operation`
+- **Description**: Cumulative time operations spent queued on the
+  client before transmission, in seconds.
+- **Use**: A rising `rate(queue)/rate(ops)` with a flat RTT average
+  points at client-side contention (e.g. RPC slot exhaustion) rather
+  than server or network latency.
 
 ```
-nfs_operation_duration_seconds_bucket{mount_point="/mnt/nfs",server="nfs-server",operation="READ",le="0.005"} 120
-nfs_operation_duration_seconds_bucket{mount_point="/mnt/nfs",server="nfs-server",operation="READ",le="0.01"}  890
-nfs_operation_duration_seconds_sum{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}              12.456
-nfs_operation_duration_seconds_count{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}            1547
+nfs_operation_rtt_seconds_total{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}   12.456
+nfs_operation_exec_seconds_total{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}  14.021
+nfs_operation_queue_seconds_total{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}  1.565
 ```
+
+> **Why counters and not a histogram?** `/proc/self/mountstats` only
+> exposes per-interval *sums* of latency, never individual RPC
+> timings, so a histogram built from this source had a `_count` equal
+> to the number of sampling intervals (not operations) and quantiles
+> that answered no real question. The counter pair yields exact,
+> correctly weighted averages over any window. True percentiles are
+> not derivable from mountstats; use eBPF-based tooling if you need
+> them.
 
 #### `nfs_operation_bytes_total`
 - **Type**: Counter
@@ -173,17 +196,19 @@ All carry the mount labels (`mount_point`, `server`).
 
 #### `nfs_mount_bytes_read_total`
 - **Type**: Counter
-- **Description**: Cumulative bytes read from the mount since it was
-  established (sourced from the `bytes:` line, not summed from per-op
-  counters).
-- **Use**: Lifetime read volume, sanity-checking against per-op
-  totals.
+- **Description**: Wire-level bytes read from the server
+  (`serverreadbytes` from the `bytes:` line): O_DIRECT reads are
+  included and page-cache hits are excluded, so this measures real
+  network transfer. Grows by the per-interval delta since the
+  exporter started.
+- **Use**: Read bandwidth: `rate(nfs_mount_bytes_read_total[5m])`.
 
 #### `nfs_mount_bytes_written_total`
 - **Type**: Counter
-- **Description**: Cumulative bytes written to the mount since it was
-  established.
-- **Use**: Lifetime write volume.
+- **Description**: Wire-level bytes written to the server
+  (`serverwritebytes`). Same delta-based semantics as the read
+  counter.
+- **Use**: Write bandwidth: `rate(nfs_mount_bytes_written_total[5m])`.
 
 ## Prometheus Configuration
 
@@ -247,20 +272,17 @@ sum by (operation) (rate(nfs_operations_total[1m]))
 ### Average RTT per operation
 
 ```promql
-sum by (operation) (rate(nfs_operation_duration_seconds_sum[5m]))
+sum by (operation) (rate(nfs_operation_rtt_seconds_total[5m]))
   /
-sum by (operation) (rate(nfs_operation_duration_seconds_count[5m]))
+sum by (operation) (rate(nfs_operations_total[5m]))
 ```
 
-### p95 latency per mount and operation
+### Application-observed latency (exec) vs. wire latency (RTT)
 
 ```promql
-histogram_quantile(
-  0.95,
-  sum by (mount_point, operation, le) (
-    rate(nfs_operation_duration_seconds_bucket[5m])
-  )
-)
+# Time per op spent queued on the client (slot pressure indicator):
+  sum by (operation) (rate(nfs_operation_queue_seconds_total[5m]))
+/ sum by (operation) (rate(nfs_operations_total[5m]))
 ```
 
 ### Error rate (%) per operation
@@ -292,7 +314,7 @@ nfs_mount_age_seconds / 3600
 ## Grafana panel ideas
 
 1. **IOPS by operation** — `sum by (operation) (rate(nfs_operations_total[1m]))`
-2. **Latency p50/p95/p99** — `histogram_quantile(0.5|0.95|0.99, sum by (operation, le) (rate(nfs_operation_duration_seconds_bucket[5m])))`
+2. **Average latency by operation** — `sum by (operation) (rate(nfs_operation_rtt_seconds_total[5m])) / sum by (operation) (rate(nfs_operations_total[5m]))` (mountstats exposes latency sums, not per-RPC timings, so averages — not percentiles — are the honest statistic here)
 3. **Throughput by mount** — `sum by (mount_point) (rate(nfs_operation_bytes_total[1m]))`, unit `bytes/sec` with SI prefix
 4. **Error & timeout rates** — `sum by (operation) (rate(nfs_operation_errors_total[5m]))` and `…_timeouts_total`
 5. **Mount age** — `nfs_mount_age_seconds`, displayed as a duration
@@ -305,18 +327,17 @@ groups:
     rules:
       - alert: HighNFSLatency
         expr: |
-          histogram_quantile(
-            0.95,
-            sum by (mount_point, operation, le) (
-              rate(nfs_operation_duration_seconds_bucket[5m])
-            )
+          (
+              sum by (mount_point, operation) (rate(nfs_operation_rtt_seconds_total[5m]))
+            /
+              sum by (mount_point, operation) (rate(nfs_operations_total[5m]))
           ) > 0.1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High NFS p95 latency on {{ $labels.mount_point }} ({{ $labels.operation }})"
-          description: "p95 latency is {{ $value }}s (threshold 0.1s)"
+          summary: "High NFS average latency on {{ $labels.mount_point }} ({{ $labels.operation }})"
+          description: "average RTT is {{ $value }}s (threshold 0.1s)"
 
       - alert: NFSErrorsRising
         expr: |

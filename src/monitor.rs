@@ -1,7 +1,9 @@
 use crate::display::{display_stats_simple, display_xprt_summary};
 use crate::parser::parse_mountstats;
 use crate::snapshot::{MountAggregator, MountReport, Report, CURRENT_SCHEMA_VERSION};
-use crate::stats::{calculate_delta_stats, calculate_xprt_delta, filter_operations};
+use crate::stats::{
+    calculate_delta_stats, calculate_mount_deltas, calculate_xprt_delta, filter_operations,
+};
 use crate::types::{NFSMount, NfsGazeError, Result};
 use chrono::Utc;
 use signal_hook::{consts::SIGINT, consts::SIGTERM, iterator::Signals};
@@ -286,6 +288,11 @@ impl Monitor {
                         current_mount.xprt.as_ref(),
                     );
 
+                    // Mount-level byte/event deltas feed the metrics
+                    // exporter. None means a counter reset invalidated
+                    // this interval.
+                    let mount_deltas = calculate_mount_deltas(previous_mount, current_mount);
+
                     // Either aggregate for the end-of-session report
                     // or render the live table — never both, because
                     // output mode is intended as a silent capture.
@@ -320,16 +327,20 @@ impl Monitor {
                                 display_xprt_summary(writer, x, slot_cap)?;
                             }
                         }
+                    }
 
-                        // Prometheus metrics export is orthogonal to
-                        // on-disk reports; keep exporting in both
-                        // modes so long-running scrapers don't go
-                        // blind during an -o session.
-                        if let Some(manager) = metrics_manager {
-                            manager.export_metrics(current_mount, &delta_stats);
-                            if let Some(ref x) = xprt_delta {
-                                manager.export_xprt(current_mount, x, slot_cap);
-                            }
+                    // Metrics export is NOT gated on op activity: a
+                    // stalled mount (ops frozen in-flight, backlog
+                    // climbing) is exactly when the xprt pressure
+                    // counters matter most, and gauges must keep
+                    // refreshing on idle mounts. Empty delta_stats
+                    // just means the op counters do not move. This is
+                    // orthogonal to on-disk reports, so scrapers stay
+                    // live during an -o session too.
+                    if let Some(manager) = metrics_manager {
+                        manager.export_metrics(current_mount, &delta_stats, mount_deltas.as_ref());
+                        if let Some(ref x) = xprt_delta {
+                            manager.export_xprt(current_mount, x, slot_cap);
                         }
                     }
                 }

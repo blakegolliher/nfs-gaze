@@ -158,7 +158,7 @@ fn test_metrics_manager_export_with_empty_stats() {
     let empty_stats: Vec<DeltaStats> = vec![];
 
     // Should handle empty stats gracefully
-    manager.export_metrics(&mount, &empty_stats);
+    manager.export_metrics(&mount, &empty_stats, None);
 }
 
 #[test]
@@ -171,8 +171,8 @@ fn test_metrics_manager_export_with_multiple_mounts() {
     let stats = create_test_delta_stats();
 
     // Should handle multiple mounts without issues
-    manager.export_metrics(&mount1, &stats);
-    manager.export_metrics(&mount2, &stats);
+    manager.export_metrics(&mount1, &stats, None);
+    manager.export_metrics(&mount2, &stats, None);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn test_metrics_manager_handles_missing_events() {
     let stats = create_test_delta_stats();
 
     // Should handle missing events gracefully
-    manager.export_metrics(&mount, &stats);
+    manager.export_metrics(&mount, &stats, None);
 }
 
 #[test]
@@ -236,7 +236,7 @@ fn test_metrics_manager_handles_high_volume_stats() {
     }
 
     // Should handle large numbers of stats without issues
-    manager.export_metrics(&mount, &large_stats);
+    manager.export_metrics(&mount, &large_stats, None);
 }
 
 #[cfg(feature = "prometheus")]
@@ -267,7 +267,7 @@ mod prometheus_tests {
         let mount = create_test_mount("server:/export", "/mnt/test");
         let stats = create_test_delta_stats();
 
-        manager.export_metrics(&mount, &stats);
+        manager.export_metrics(&mount, &stats, None);
 
         // Get metrics output
         let metrics = manager.get_prometheus_metrics();
@@ -275,7 +275,184 @@ mod prometheus_tests {
 
         let metrics_text = metrics.unwrap();
         assert!(metrics_text.contains("nfs_operations_total"));
-        assert!(metrics_text.contains("nfs_operation_duration_seconds"));
+        assert!(metrics_text.contains("nfs_operation_rtt_seconds_total"));
+        assert!(metrics_text.contains("nfs_operation_exec_seconds_total"));
+        assert!(metrics_text.contains("nfs_operation_queue_seconds_total"));
+    }
+
+    /// Extract the value of the first sample of `metric` whose label
+    /// set contains `label_fragment`. Panics if absent — the caller
+    /// asserts existence by calling this.
+    fn metric_value(text: &str, metric: &str, label_fragment: &str) -> f64 {
+        text.lines()
+            .find(|l| l.starts_with(&format!("{metric}{{")) && l.contains(label_fragment))
+            .unwrap_or_else(|| panic!("no sample for {metric} with {label_fragment} in:\n{text}"))
+            .rsplit(' ')
+            .next()
+            .expect("sample line has a value")
+            .parse::<f64>()
+            .expect("sample value parses as f64")
+    }
+
+    #[test]
+    fn test_mount_byte_counters_accumulate_deltas_not_cumulative() {
+        use nfs_gaze::stats::MountDeltas;
+
+        let config = MetricsConfig {
+            enable_prometheus: true,
+            ..Default::default()
+        };
+        let manager = MetricsManager::new(config).expect("Failed to create metrics manager");
+        // Large cumulative totals on the mount; if the exporter ever
+        // regresses to inc_by(cumulative), the assertion below fails
+        // loudly (10 MiB per interval instead of the small deltas).
+        let mount = create_test_mount("server:/export", "/mnt/test");
+
+        let interval1 = MountDeltas {
+            delta_bytes_read: 100,
+            delta_bytes_write: 200,
+            delta_events: None,
+        };
+        let interval2 = MountDeltas {
+            delta_bytes_read: 150,
+            delta_bytes_write: 250,
+            delta_events: None,
+        };
+        manager.export_metrics(&mount, &[], Some(&interval1));
+        manager.export_metrics(&mount, &[], Some(&interval2));
+
+        let text = manager.get_prometheus_metrics().expect("metrics output");
+        assert_eq!(
+            metric_value(&text, "nfs_mount_bytes_read_total", "/mnt/test"),
+            250.0,
+            "bytes counter must equal the sum of interval deltas"
+        );
+        assert_eq!(
+            metric_value(&text, "nfs_mount_bytes_written_total", "/mnt/test"),
+            450.0
+        );
+    }
+
+    #[test]
+    fn test_vfs_event_counters_accumulate_deltas_not_cumulative() {
+        use nfs_gaze::stats::MountDeltas;
+
+        let config = MetricsConfig {
+            enable_prometheus: true,
+            ..Default::default()
+        };
+        let manager = MetricsManager::new(config).expect("Failed to create metrics manager");
+        let mount = create_test_mount("server:/export", "/mnt/test");
+
+        let events_delta = |open: i64, fsync: i64| NFSEvents {
+            vfs_open: open,
+            vfs_fsync: fsync,
+            ..NFSEvents::default()
+        };
+        let interval1 = MountDeltas {
+            delta_bytes_read: 0,
+            delta_bytes_write: 0,
+            delta_events: Some(events_delta(5, 2)),
+        };
+        let interval2 = MountDeltas {
+            delta_bytes_read: 0,
+            delta_bytes_write: 0,
+            delta_events: Some(events_delta(7, 0)),
+        };
+        manager.export_metrics(&mount, &[], Some(&interval1));
+        manager.export_metrics(&mount, &[], Some(&interval2));
+
+        let text = manager.get_prometheus_metrics().expect("metrics output");
+        assert_eq!(
+            metric_value(&text, "nfs_vfs_open_total", "/mnt/test"),
+            12.0,
+            "event counter must equal the sum of interval deltas"
+        );
+        assert_eq!(metric_value(&text, "nfs_vfs_fsync_total", "/mnt/test"), 2.0);
+    }
+
+    #[test]
+    fn test_latency_counters_carry_true_sums_and_histogram_is_gone() {
+        let config = MetricsConfig {
+            enable_prometheus: true,
+            ..Default::default()
+        };
+        let manager = MetricsManager::new(config).expect("Failed to create metrics manager");
+        let mount = create_test_mount("server:/export", "/mnt/test");
+        // Two intervals of the same stats: READ delta_ops 100 with
+        // 1000 ms of RTT each, so totals are 200 ops and 2.0 s.
+        let stats = create_test_delta_stats();
+        manager.export_metrics(&mount, &stats, None);
+        manager.export_metrics(&mount, &stats, None);
+
+        let text = manager.get_prometheus_metrics().expect("metrics output");
+        assert_eq!(
+            metric_value(&text, "nfs_operations_total", "operation=\"READ\""),
+            200.0
+        );
+        assert_eq!(
+            metric_value(
+                &text,
+                "nfs_operation_rtt_seconds_total",
+                "operation=\"READ\""
+            ),
+            2.0,
+            "rtt seconds counter must be sum(delta_rtt)/1000"
+        );
+        assert_eq!(
+            metric_value(
+                &text,
+                "nfs_operation_exec_seconds_total",
+                "operation=\"READ\""
+            ),
+            4.0
+        );
+        assert_eq!(
+            metric_value(
+                &text,
+                "nfs_operation_queue_seconds_total",
+                "operation=\"READ\""
+            ),
+            1.0
+        );
+        assert!(
+            !text.contains("nfs_operation_duration_seconds"),
+            "the interval-average histogram must be gone — its count was \
+             intervals (not ops) and its quantiles were meaningless"
+        );
+    }
+
+    #[test]
+    fn test_reset_interval_exports_nothing_but_keeps_gauges_fresh() {
+        use nfs_gaze::stats::MountDeltas;
+
+        let config = MetricsConfig {
+            enable_prometheus: true,
+            ..Default::default()
+        };
+        let manager = MetricsManager::new(config).expect("Failed to create metrics manager");
+        let mount = create_test_mount("server:/export", "/mnt/test");
+
+        let interval = MountDeltas {
+            delta_bytes_read: 100,
+            delta_bytes_write: 200,
+            delta_events: None,
+        };
+        manager.export_metrics(&mount, &[], Some(&interval));
+        // Counter-reset interval: no deltas available.
+        manager.export_metrics(&mount, &[], None);
+
+        let text = manager.get_prometheus_metrics().expect("metrics output");
+        assert_eq!(
+            metric_value(&text, "nfs_mount_bytes_read_total", "/mnt/test"),
+            100.0,
+            "a reset interval must not move the byte counters"
+        );
+        assert_eq!(
+            metric_value(&text, "nfs_mount_age_seconds", "/mnt/test"),
+            3600.0,
+            "the age gauge must still refresh on reset intervals"
+        );
     }
 
     #[test]
@@ -376,7 +553,7 @@ fn test_concurrent_metrics_export() {
             let mount =
                 create_test_mount(&format!("server{}:/export", i), &format!("/mnt/test{}", i));
             let stats = create_test_delta_stats();
-            manager_clone.export_metrics(&mount, &stats);
+            manager_clone.export_metrics(&mount, &stats, None);
         });
         handles.push(handle);
     }
@@ -398,5 +575,5 @@ fn test_metrics_manager_with_special_characters() {
     let stats = create_test_delta_stats();
 
     // Should handle special characters gracefully
-    manager.export_metrics(&mount, &stats);
+    manager.export_metrics(&mount, &stats, None);
 }

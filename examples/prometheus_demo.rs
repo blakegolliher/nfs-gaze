@@ -62,7 +62,7 @@ fn main() {
                 };
 
                 // Export metrics
-                manager.export_metrics(&sample_mount, &sample_stats);
+                manager.export_metrics(&sample_mount, &sample_stats, None);
                 println!("Sample metrics exported");
 
                 // Show what Prometheus output would look like

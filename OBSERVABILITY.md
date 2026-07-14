@@ -15,7 +15,7 @@ live terminal display.
 
 The exporter exposes:
 
-- per-operation counters, latency histograms, byte counts, error and
+- per-operation counters, cumulative latency counters, byte counts, error and
   timeout counters (labelled by `mount_point`, `server`, and
   `operation`),
 - per-VFS-event counters (open, lookup, access, read_page, write_page,
@@ -98,12 +98,9 @@ separate scrape job per NFS mount.
 nfs_operations_total{mount_point="/mnt/nfs",server="nfs-server",operation="READ"} 1547
 nfs_operations_total{mount_point="/mnt/nfs",server="nfs-server",operation="WRITE"} 312
 
-# HELP nfs_operation_duration_seconds Duration of NFS operations in seconds
-# TYPE nfs_operation_duration_seconds histogram
-nfs_operation_duration_seconds_bucket{mount_point="/mnt/nfs",server="nfs-server",operation="READ",le="0.005"} 120
-nfs_operation_duration_seconds_bucket{mount_point="/mnt/nfs",server="nfs-server",operation="READ",le="0.01"}  890
-nfs_operation_duration_seconds_sum{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}              12.456
-nfs_operation_duration_seconds_count{mount_point="/mnt/nfs",server="nfs-server",operation="READ"}            1547
+# HELP nfs_operation_rtt_seconds_total Cumulative RPC round-trip time in seconds. Average RTT = rate(nfs_operation_rtt_seconds_total) / rate(nfs_operations_total)
+# TYPE nfs_operation_rtt_seconds_total counter
+nfs_operation_rtt_seconds_total{mount_point="/mnt/nfs",server="nfs-server",operation="READ"} 12.456
 
 # HELP nfs_vfs_open_total Total number of VFS open events
 # TYPE nfs_vfs_open_total counter

@@ -1,16 +1,34 @@
+use crate::stats::MountDeltas;
 use crate::types::{DeltaStats, DeltaXprtStats, NFSEvents, NFSMount};
 use std::time::Duration;
 
 #[cfg(feature = "prometheus")]
-use prometheus::{
-    CounterVec, Encoder, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
-};
+use prometheus::{CounterVec, Encoder, GaugeVec, Opts, Registry, TextEncoder};
 
-/// Metrics exporter trait for different backends
+/// Metrics exporter trait for different backends.
+///
+/// # Delta semantics
+///
+/// Every `export_*` method that feeds a counter takes *per-interval
+/// deltas*, never the kernel's cumulative values. Counters are
+/// incremented once per interval by the interval's delta, so their
+/// value converges on "total since the exporter started". Feeding
+/// cumulative values (the original bug) inflates a counter
+/// quadratically: after N intervals it holds ~N x cumulative.
 pub trait MetricsExporter: Send + Sync {
     fn export_nfs_operation_metrics(&self, mount: &NFSMount, stats: &[DeltaStats]);
-    fn export_nfs_events_metrics(&self, mount: &NFSMount, events: &NFSEvents);
-    fn export_mount_info_metrics(&self, mount: &NFSMount);
+    /// `events_delta` is the per-interval difference of the `events:`
+    /// counters, as produced by [`crate::stats::calculate_mount_deltas`].
+    fn export_nfs_events_metrics(&self, mount: &NFSMount, events_delta: &NFSEvents);
+    /// `delta_bytes_read` / `delta_bytes_write` are the per-interval
+    /// wire-level byte deltas. Pass zero on intervals where no delta
+    /// is available (reset); gauges still refresh.
+    fn export_mount_info_metrics(
+        &self,
+        mount: &NFSMount,
+        delta_bytes_read: i64,
+        delta_bytes_write: i64,
+    );
     fn get_metrics_output(&self) -> Option<String>;
 
     /// Export RPC transport deltas for a mount. Defaulted to a
@@ -52,9 +70,17 @@ impl Default for MetricsConfig {
 #[cfg(feature = "prometheus")]
 pub struct PrometheusExporter {
     registry: Registry,
-    // NFS Operation metrics with labels
+    // NFS Operation metrics with labels. Latency is exported as a
+    // pair of counters (cumulative seconds + nfs_operations_total)
+    // rather than a histogram: mountstats only exposes per-interval
+    // sums, so a histogram built from interval averages had a count
+    // of intervals (not ops) and meaningless quantiles. With the
+    // counter pair, `rate(rtt_seconds_total) / rate(operations_total)`
+    // yields the true average latency over any window.
     nfs_operations_total: CounterVec,
-    nfs_operation_duration_seconds: HistogramVec,
+    nfs_operation_rtt_seconds_total: CounterVec,
+    nfs_operation_exec_seconds_total: CounterVec,
+    nfs_operation_queue_seconds_total: CounterVec,
     nfs_operation_bytes_total: CounterVec,
     nfs_operation_errors_total: CounterVec,
     nfs_operation_timeouts_total: CounterVec,
@@ -111,14 +137,30 @@ impl PrometheusExporter {
             operation_labels,
         )?;
 
-        let nfs_operation_duration_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "nfs_operation_duration_seconds",
-                "Duration of NFS operations in seconds",
-            )
-            .buckets(vec![
-                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-            ]),
+        let nfs_operation_rtt_seconds_total = CounterVec::new(
+            Opts::new(
+                "nfs_operation_rtt_seconds_total",
+                "Cumulative RPC round-trip time in seconds. Average RTT = \
+                 rate(nfs_operation_rtt_seconds_total) / rate(nfs_operations_total)",
+            ),
+            operation_labels,
+        )?;
+
+        let nfs_operation_exec_seconds_total = CounterVec::new(
+            Opts::new(
+                "nfs_operation_exec_seconds_total",
+                "Cumulative operation execution time (queue + RTT) in seconds. \
+                 Average = rate(nfs_operation_exec_seconds_total) / rate(nfs_operations_total)",
+            ),
+            operation_labels,
+        )?;
+
+        let nfs_operation_queue_seconds_total = CounterVec::new(
+            Opts::new(
+                "nfs_operation_queue_seconds_total",
+                "Cumulative time operations spent queued before transmission, in seconds. \
+                 Average = rate(nfs_operation_queue_seconds_total) / rate(nfs_operations_total)",
+            ),
             operation_labels,
         )?;
 
@@ -221,7 +263,8 @@ impl PrometheusExporter {
         let nfs_mount_bytes_read_total = CounterVec::new(
             Opts::new(
                 "nfs_mount_bytes_read_total",
-                "Total bytes read from NFS mount",
+                "Total wire-level bytes read from the NFS server (serverreadbytes; \
+                 includes O_DIRECT, excludes page-cache hits)",
             ),
             mount_labels,
         )?;
@@ -229,7 +272,7 @@ impl PrometheusExporter {
         let nfs_mount_bytes_written_total = CounterVec::new(
             Opts::new(
                 "nfs_mount_bytes_written_total",
-                "Total bytes written to NFS mount",
+                "Total wire-level bytes written to the NFS server (serverwritebytes)",
             ),
             mount_labels,
         )?;
@@ -299,7 +342,9 @@ impl PrometheusExporter {
 
         // Register metrics
         registry.register(Box::new(nfs_operations_total.clone()))?;
-        registry.register(Box::new(nfs_operation_duration_seconds.clone()))?;
+        registry.register(Box::new(nfs_operation_rtt_seconds_total.clone()))?;
+        registry.register(Box::new(nfs_operation_exec_seconds_total.clone()))?;
+        registry.register(Box::new(nfs_operation_queue_seconds_total.clone()))?;
         registry.register(Box::new(nfs_operation_bytes_total.clone()))?;
         registry.register(Box::new(nfs_operation_errors_total.clone()))?;
         registry.register(Box::new(nfs_operation_timeouts_total.clone()))?;
@@ -334,7 +379,9 @@ impl PrometheusExporter {
         Ok(Self {
             registry,
             nfs_operations_total,
-            nfs_operation_duration_seconds,
+            nfs_operation_rtt_seconds_total,
+            nfs_operation_exec_seconds_total,
+            nfs_operation_queue_seconds_total,
             nfs_operation_bytes_total,
             nfs_operation_errors_total,
             nfs_operation_timeouts_total,
@@ -457,11 +504,23 @@ impl MetricsExporter for PrometheusExporter {
                 .with_label_values(labels)
                 .inc_by(stat.delta_ops as f64);
 
-            // Add duration histogram (convert ms to seconds)
-            if stat.avg_rtt > 0.0 {
-                self.nfs_operation_duration_seconds
+            // Cumulative latency counters (ms deltas -> seconds).
+            // Consumers derive averages by dividing by the rate of
+            // nfs_operations_total; see the metric HELP strings.
+            if stat.delta_rtt > 0 {
+                self.nfs_operation_rtt_seconds_total
                     .with_label_values(labels)
-                    .observe(stat.avg_rtt / 1000.0);
+                    .inc_by(stat.delta_rtt as f64 / 1000.0);
+            }
+            if stat.delta_exec > 0 {
+                self.nfs_operation_exec_seconds_total
+                    .with_label_values(labels)
+                    .inc_by(stat.delta_exec as f64 / 1000.0);
+            }
+            if stat.delta_queue > 0 {
+                self.nfs_operation_queue_seconds_total
+                    .with_label_values(labels)
+                    .inc_by(stat.delta_queue as f64 / 1000.0);
             }
 
             // Add bytes transferred
@@ -496,7 +555,8 @@ impl MetricsExporter for PrometheusExporter {
         // Create labels for VFS events
         let labels = &[mount.mount_point.as_str(), mount.server.as_str()];
 
-        // Export each VFS event type to its own metric with labels
+        // `events` holds this interval's deltas; each counter grows by
+        // the work done in the interval, never by a cumulative total.
         if events.vfs_open > 0 {
             self.nfs_vfs_open_total
                 .with_label_values(labels)
@@ -545,19 +605,30 @@ impl MetricsExporter for PrometheusExporter {
         // Note: We could add more VFS event types here as needed
     }
 
-    fn export_mount_info_metrics(&self, mount: &NFSMount) {
+    fn export_mount_info_metrics(
+        &self,
+        mount: &NFSMount,
+        delta_bytes_read: i64,
+        delta_bytes_write: i64,
+    ) {
         // Create labels for mount metrics
         let labels = &[mount.mount_point.as_str(), mount.server.as_str()];
 
+        // Age is a gauge of the kernel's current value; the byte
+        // counters grow by this interval's delta only.
         self.nfs_mount_age_seconds
             .with_label_values(labels)
             .set(mount.age as f64);
-        self.nfs_mount_bytes_read_total
-            .with_label_values(labels)
-            .inc_by(mount.bytes_read as f64);
-        self.nfs_mount_bytes_written_total
-            .with_label_values(labels)
-            .inc_by(mount.bytes_write as f64);
+        if delta_bytes_read > 0 {
+            self.nfs_mount_bytes_read_total
+                .with_label_values(labels)
+                .inc_by(delta_bytes_read as f64);
+        }
+        if delta_bytes_write > 0 {
+            self.nfs_mount_bytes_written_total
+                .with_label_values(labels)
+                .inc_by(delta_bytes_write as f64);
+        }
     }
 
     fn export_nfs_xprt_metrics(
@@ -688,24 +759,39 @@ impl MetricsManager {
         }
     }
 
-    pub fn export_metrics(&self, mount: &NFSMount, stats: &[DeltaStats]) {
+    /// Export one interval's metrics for a mount.
+    ///
+    /// `stats` holds the per-operation deltas (possibly empty on an
+    /// idle interval — counters simply do not move). `mount_deltas`
+    /// holds the mount-level byte/event deltas; pass `None` on
+    /// intervals invalidated by a counter reset, in which case the
+    /// byte and event counters stay put but gauges still refresh.
+    pub fn export_metrics(
+        &self,
+        mount: &NFSMount,
+        stats: &[DeltaStats],
+        mount_deltas: Option<&MountDeltas>,
+    ) {
         #[cfg(feature = "prometheus")]
         {
             for exporter in &self.exporters {
                 exporter.export_nfs_operation_metrics(mount, stats);
 
-                if let Some(events) = &mount.events {
-                    exporter.export_nfs_events_metrics(mount, events);
+                if let Some(events_delta) = mount_deltas.and_then(|d| d.delta_events.as_ref()) {
+                    exporter.export_nfs_events_metrics(mount, events_delta);
                 }
 
-                exporter.export_mount_info_metrics(mount);
+                let (delta_read, delta_write) = mount_deltas
+                    .map(|d| (d.delta_bytes_read, d.delta_bytes_write))
+                    .unwrap_or((0, 0));
+                exporter.export_mount_info_metrics(mount, delta_read, delta_write);
             }
         }
 
         #[cfg(not(feature = "prometheus"))]
         {
             // No-op when the prometheus feature is disabled.
-            let _ = (mount, stats);
+            let _ = (mount, stats, mount_deltas);
         }
     }
 
@@ -836,7 +922,7 @@ mod tests {
         let stats = create_test_delta_stats();
 
         // Should not panic even with no exporters enabled
-        manager.export_metrics(&mount, &stats);
+        manager.export_metrics(&mount, &stats, None);
     }
 
     #[cfg(feature = "prometheus")]
