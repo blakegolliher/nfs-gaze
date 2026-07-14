@@ -328,36 +328,41 @@ impl Monitor {
                     // Either aggregate for the end-of-session report
                     // or render the live table — never both, because
                     // output mode is intended as a silent capture.
-                    if !delta_stats.is_empty() {
-                        if output_mode {
-                            if let Some(agg) = aggregators.get_mut(&current_mount.mount_point) {
-                                agg.record(&delta_stats);
-                                // xprt folds into the same
-                                // aggregator so the finalised
-                                // MountReport carries a matching
-                                // XprtReport. Idle xprt samples (no
-                                // delta but still non-None) are
-                                // silently added as zeros by
-                                // record_xprt.
-                                if let Some(ref x) = xprt_delta {
-                                    agg.record_xprt(x);
-                                }
-                            }
-                        } else {
-                            display_stats_simple(
-                                writer,
-                                current_mount,
-                                &delta_stats,
-                                show_bandwidth,
-                                &timestamp,
-                            )?;
-                            // Always print the xprt one-liner under
-                            // the op table when we have xprt data
-                            // for this mount. It co-appears with the
-                            // op table so an idle mount stays quiet.
+                    if output_mode {
+                        if let Some(agg) = aggregators.get_mut(&current_mount.mount_point) {
+                            // Every interval is recorded, including
+                            // op-idle ones, so covered time tracks
+                            // real wall clock: a mount idle for 90%
+                            // of a session must not report rates as
+                            // if it had been busy throughout. An
+                            // idle sample contributes elapsed time
+                            // and nothing else.
+                            agg.record(&delta_stats, elapsed_seconds);
+                            // xprt folds into the same aggregator so
+                            // the finalised MountReport carries a
+                            // matching XprtReport. Recorded even
+                            // when no op completed: transports can
+                            // move (sends, backlog) while every op
+                            // is stuck in flight, which is exactly
+                            // the slot-pressure signal.
                             if let Some(ref x) = xprt_delta {
-                                display_xprt_summary(writer, x, slot_cap)?;
+                                agg.record_xprt(x);
                             }
+                        }
+                    } else if !delta_stats.is_empty() {
+                        display_stats_simple(
+                            writer,
+                            current_mount,
+                            &delta_stats,
+                            show_bandwidth,
+                            &timestamp,
+                        )?;
+                        // Always print the xprt one-liner under
+                        // the op table when we have xprt data
+                        // for this mount. It co-appears with the
+                        // op table so an idle mount stays quiet.
+                        if let Some(ref x) = xprt_delta {
+                            display_xprt_summary(writer, x, slot_cap)?;
                         }
                     }
 
@@ -418,7 +423,7 @@ impl Monitor {
 
             let mut mount_reports: Vec<MountReport> = aggregators
                 .into_values()
-                .map(|agg| agg.finalise(duration_sec, slot_cap))
+                .map(|agg| agg.finalise(slot_cap))
                 .collect();
             // Sort by device for deterministic output across runs on
             // the same host; HashMap iteration order is otherwise
@@ -795,6 +800,97 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
         assert_eq!(
             headers, 2,
             "-c 2 must render exactly two intervals: {output}"
+        );
+    }
+
+    #[test]
+    fn test_output_mode_rates_use_covered_time_not_requested_duration() {
+        use tempfile::TempDir;
+
+        // The bumper advances /mnt/a's READ counter by 100 ops every
+        // 50 ms — a true rate of 2000 ops/s. The seed sample covers
+        // none of the capture, so dividing by the requested duration
+        // instead of the measured covered time understates the rate
+        // by interval/duration (~33% here). The generous band still
+        // catches that regression (~1333 ops/s) while tolerating
+        // scheduler jitter and the 50 ms bump granularity.
+        let dir = TempDir::new().expect("create tempdir");
+        let path = dir.path().join("mountstats");
+        let report_path = dir.path().join("report.json");
+        write_two_mount_stats(&path, 1);
+
+        // Mirror main(): the aggregation target set is locked in from
+        // an initial parse before the loop starts.
+        let initial_mounts = crate::parser::parse_mountstats(path.to_str().expect("utf-8 path"))
+            .expect("initial parse");
+        let monitor_mounts =
+            Monitor::get_mounts_to_monitor(Some("/mnt/a".to_string()), &initial_mounts)
+                .expect("mount filter matches");
+
+        let bump_path = path.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let bump_stop = stop.clone();
+        let bumper = thread::spawn(move || {
+            let mut k = 2;
+            while !bump_stop.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(50));
+                write_two_mount_stats(&bump_path, k);
+                k += 1;
+            }
+        });
+
+        let monitor = Monitor::new();
+        let mut output = Vec::<u8>::new();
+        let result = monitor.monitoring_loop(
+            &mut output,
+            MonitorConfig {
+                mountstats_path: path.to_str().expect("utf-8 path"),
+                monitor_mounts,
+                mount_point: Some("/mnt/a".to_string()),
+                operations_filter: HashSet::new(),
+                interval: Duration::from_millis(400),
+                count: 0,
+                duration: Some(Duration::from_millis(1200)),
+                output: Some(report_path.clone()),
+                slot_cap: None,
+                show_bandwidth: false,
+                clear_screen: false,
+                metrics_manager: None,
+            },
+        );
+        stop.store(true, Ordering::SeqCst);
+        bumper.join().expect("bumper thread");
+        result.expect("loop should exit cleanly");
+
+        let json = std::fs::read_to_string(&report_path).expect("read report file");
+        let report: crate::snapshot::Report =
+            serde_json::from_str(&json).expect("report must be valid JSON");
+        let mount = report
+            .mounts
+            .iter()
+            .find(|m| m.mount_point == "/mnt/a")
+            .expect("report must include the monitored mount");
+
+        assert!(
+            mount.covered_sec > 0.0,
+            "covered_sec must reflect measured intervals: {json}"
+        );
+        assert!(
+            (1500.0..=2700.0).contains(&mount.summary.ops_per_sec),
+            "true rate is 2000 ops/s; requested-duration denominators would \
+             report ~1333. got {} over covered_sec {}",
+            mount.summary.ops_per_sec,
+            mount.covered_sec
+        );
+        // The report must be internally consistent: rate × covered
+        // time reproduces the op total exactly.
+        assert!(
+            (mount.summary.ops_per_sec * mount.covered_sec - mount.summary.total_ops as f64).abs()
+                < 1.0,
+            "ops_per_sec ({}) × covered_sec ({}) must equal total_ops ({})",
+            mount.summary.ops_per_sec,
+            mount.covered_sec,
+            mount.summary.total_ops
         );
     }
 

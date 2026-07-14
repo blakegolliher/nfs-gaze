@@ -68,6 +68,15 @@ pub struct MountReport {
     pub fstype: String,
     /// Mount options string. May be empty.
     pub options: String,
+    /// Seconds of wall-clock actually covered by recorded samples —
+    /// the sum of each interval's measured elapsed time, including
+    /// op-idle intervals. This is the denominator behind every
+    /// `ops_per_sec` in the report; it is smaller than the requested
+    /// duration (the seed sample covers none of it) and reflects
+    /// scheduling jitter. Zero when read from reports written before
+    /// the field existed.
+    #[serde(default)]
+    pub covered_sec: f64,
     /// Mount-level totals across all operations.
     pub summary: SummaryStats,
     /// Per-operation aggregated stats, sorted by `ops` descending so
@@ -154,9 +163,9 @@ pub struct OpReport {
 /// single [`MountReport`] at the end of a capture session.
 ///
 /// Callers construct one aggregator per monitored mount before the
-/// loop starts, push each interval's deltas via [`Self::record`], and
-/// call [`Self::finalise`] once with the total capture duration to
-/// produce the final report.
+/// loop starts, push each interval's deltas (with the interval's
+/// measured elapsed time) via [`Self::record`], and call
+/// [`Self::finalise`] once to produce the final report.
 ///
 /// The aggregation matches `nfs-monitor`'s semantics so cutover
 /// reports stay comparable:
@@ -178,6 +187,9 @@ pub struct MountAggregator {
     mount_point: String,
     fstype: String,
     options: String,
+    /// Wall-clock seconds covered by recorded samples. See
+    /// [`MountReport::covered_sec`].
+    covered_seconds: f64,
     ops: HashMap<String, OpAccumulator>,
     /// Lazily populated on the first `record_xprt` call. Stays
     /// `None` for mounts whose xprt deltas never arrived (UDP/RDMA
@@ -235,6 +247,7 @@ impl MountAggregator {
             mount_point: mount.mount_point.clone(),
             fstype,
             options,
+            covered_seconds: 0.0,
             ops: HashMap::new(),
             xprt: None,
         }
@@ -282,12 +295,24 @@ impl MountAggregator {
 
     /// Fold one interval's worth of deltas into the aggregator.
     ///
+    /// `elapsed_seconds` is the interval's *measured* wall-clock
+    /// length; it accumulates into the covered time that later
+    /// serves as the rate denominator. Callers must record every
+    /// interval — including ones with an empty `sample` — so idle
+    /// time counts: dividing by requested duration (the old
+    /// behaviour) understated every rate by interval/duration, and
+    /// dividing by busy-time-only would overstate rates on idle
+    /// mounts.
+    ///
     /// Ops with `delta_ops == 0` are already filtered out upstream by
     /// `calculate_delta_stats`, but the aggregator tolerates them
     /// anyway: they are added to the zero-initialised accumulator
     /// without affecting the ops-weighted RTT or the per-interval
     /// min/max bounds.
-    pub fn record(&mut self, sample: &[DeltaStats]) {
+    pub fn record(&mut self, sample: &[DeltaStats], elapsed_seconds: f64) {
+        if elapsed_seconds > 0.0 {
+            self.covered_seconds += elapsed_seconds;
+        }
         for delta in sample {
             let acc = self.ops.entry(delta.operation.clone()).or_default();
             acc.ops_total += delta.delta_ops;
@@ -312,14 +337,17 @@ impl MountAggregator {
 
     /// Consume the aggregator and produce a [`MountReport`].
     ///
-    /// `duration_sec` is the total capture length used to derive
-    /// `ops_per_sec` fields. A zero duration is handled gracefully:
-    /// all derived rates become zero rather than dividing by zero.
-    /// `slot_cap` is stamped into the emitted [`XprtReport`] (if
-    /// any); it is accepted here rather than held on the aggregator
-    /// because it is a session-constant external value.
-    pub fn finalise(self, duration_sec: u64, slot_cap: Option<i64>) -> MountReport {
-        let denom = duration_sec as f64;
+    /// Rates are derived over the accumulated covered time (the sum
+    /// of measured interval lengths), not over a caller-supplied
+    /// duration: a `-d 60 -i 10` capture covers roughly 50 seconds
+    /// of samples, and dividing by 60 would understate every rate
+    /// by interval/duration. Zero covered time (no samples) yields
+    /// zero rates rather than dividing by zero. `slot_cap` is
+    /// stamped into the emitted [`XprtReport`] (if any); it is
+    /// accepted here rather than held on the aggregator because it
+    /// is a session-constant external value.
+    pub fn finalise(self, slot_cap: Option<i64>) -> MountReport {
+        let denom = self.covered_seconds;
         let mut total_ops: i64 = 0;
         let mut total_retrans: i64 = 0;
         let mut total_timeouts: i64 = 0;
@@ -405,6 +433,7 @@ impl MountAggregator {
             mount_point: self.mount_point,
             fstype: self.fstype,
             options: self.options,
+            covered_sec: self.covered_seconds,
             summary,
             operations,
             xprt,
@@ -469,6 +498,7 @@ mod tests {
             mount_point: "/mnt/x".into(),
             fstype: "nfs4".into(),
             options: String::new(),
+            covered_sec: 0.0,
             summary: SummaryStats {
                 total_ops: 0,
                 ops_per_sec: 0.0,
@@ -562,11 +592,11 @@ mod tests {
 
         // Three intervals: (100 ops, 100ms rtt), (200 ops, 240ms rtt), (50 ops, 30ms rtt)
         // Ops-weighted mean RTT = (100+240+30) / (100+200+50) = 370/350 ≈ 1.057ms
-        agg.record(&[delta("READ", 100, 100, 0, 0)]);
-        agg.record(&[delta("READ", 200, 240, 0, 0)]);
-        agg.record(&[delta("READ", 50, 30, 0, 0)]);
+        agg.record(&[delta("READ", 100, 100, 0, 0)], 4.0);
+        agg.record(&[delta("READ", 200, 240, 0, 0)], 3.0);
+        agg.record(&[delta("READ", 50, 30, 0, 0)], 3.0);
 
-        let report = agg.finalise(10, None);
+        let report = agg.finalise(None);
         assert_eq!(report.summary.total_ops, 350);
         assert!((report.summary.ops_per_sec - 35.0).abs() < 1e-9);
         assert_eq!(report.operations.len(), 1);
@@ -589,11 +619,11 @@ mod tests {
         let mut agg = MountAggregator::new(&mount, String::new(), String::new());
 
         // Per-interval averages: 1.0, 5.0, 0.5 → min 0.5, max 5.0
-        agg.record(&[delta("READ", 10, 10, 0, 0)]); // avg 1.0
-        agg.record(&[delta("READ", 10, 50, 0, 0)]); // avg 5.0
-        agg.record(&[delta("READ", 10, 5, 0, 0)]); // avg 0.5
+        agg.record(&[delta("READ", 10, 10, 0, 0)], 1.0); // avg 1.0
+        agg.record(&[delta("READ", 10, 50, 0, 0)], 1.0); // avg 5.0
+        agg.record(&[delta("READ", 10, 5, 0, 0)], 1.0); // avg 0.5
 
-        let report = agg.finalise(3, None);
+        let report = agg.finalise(None);
         let op = &report.operations[0];
         assert!((op.rtt_min_ms - 0.5).abs() < 1e-9);
         assert!((op.rtt_max_ms - 5.0).abs() < 1e-9);
@@ -608,21 +638,85 @@ mod tests {
         let mount = test_mount();
         let mut agg = MountAggregator::new(&mount, String::new(), String::new());
 
-        agg.record(&[delta("READ", 100, 50, 0, 0), delta("GETATTR", 0, 0, 0, 0)]);
+        agg.record(
+            &[delta("READ", 100, 50, 0, 0), delta("GETATTR", 0, 0, 0, 0)],
+            10.0,
+        );
 
-        let report = agg.finalise(10, None);
+        let report = agg.finalise(None);
         assert_eq!(report.operations.len(), 1, "silent op should be dropped");
         assert_eq!(report.operations[0].name, "READ");
         assert_eq!(report.summary.total_ops, 100);
     }
 
     #[test]
-    fn aggregator_handles_zero_duration_without_dividing_by_zero() {
+    fn aggregator_covered_time_includes_idle_intervals() {
+        // A mount busy for one second and idle for nine must report
+        // rates over all ten seconds. Idle intervals carry an empty
+        // sample but real elapsed time.
         let mount = test_mount();
         let mut agg = MountAggregator::new(&mount, String::new(), String::new());
-        agg.record(&[delta("READ", 50, 25, 0, 0)]);
+        agg.record(&[delta("READ", 100, 50, 0, 0)], 1.0);
+        for _ in 0..9 {
+            agg.record(&[], 1.0);
+        }
 
-        let report = agg.finalise(0, None);
+        let report = agg.finalise(None);
+        assert!((report.covered_sec - 10.0).abs() < 1e-9);
+        assert!(
+            (report.summary.ops_per_sec - 10.0).abs() < 1e-9,
+            "100 ops over 10 covered seconds must be 10 ops/s, got {}",
+            report.summary.ops_per_sec
+        );
+        assert!((report.operations[0].ops_per_sec - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn aggregator_rates_use_measured_elapsed_not_nominal_interval() {
+        // Intervals rarely last exactly the nominal -i value; the
+        // denominator must be the sum of what was measured.
+        let mount = test_mount();
+        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        agg.record(&[delta("READ", 100, 50, 0, 0)], 1.05);
+        agg.record(&[delta("READ", 100, 50, 0, 0)], 1.10);
+        agg.record(&[delta("READ", 100, 50, 0, 0)], 0.85);
+
+        let report = agg.finalise(None);
+        let expected = 300.0 / 3.0;
+        assert!((report.covered_sec - 3.0).abs() < 1e-9);
+        assert!(
+            (report.summary.ops_per_sec - expected).abs() < 1e-9,
+            "expected {expected} ops/s over measured time, got {}",
+            report.summary.ops_per_sec
+        );
+    }
+
+    #[test]
+    fn covered_sec_defaults_to_zero_for_old_reports_and_round_trips() {
+        // Reports written before covered_sec existed (e.g. the
+        // nfs-monitor fixture) must deserialise with 0.0; new
+        // reports must carry the field through JSON.
+        let old: Report = serde_json::from_str(NFS_MONITOR_FIXTURE).expect("fixture deserialise");
+        assert_eq!(old.mounts[0].covered_sec, 0.0);
+
+        let mount = test_mount();
+        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        agg.record(&[delta("READ", 10, 5, 0, 0)], 2.5);
+        let report = agg.finalise(None);
+        let json = serde_json::to_string(&report).expect("serialise");
+        assert!(
+            json.contains("\"covered_sec\":2.5"),
+            "covered_sec must be serialised: {json}"
+        );
+    }
+
+    #[test]
+    fn aggregator_handles_zero_covered_time_without_dividing_by_zero() {
+        let mount = test_mount();
+        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        agg.record(&[delta("READ", 50, 25, 0, 0)], 0.0);
+
+        let report = agg.finalise(None);
         assert_eq!(report.summary.ops_per_sec, 0.0);
         assert_eq!(report.operations[0].ops_per_sec, 0.0);
         // The ops-weighted mean RTT is well-defined even at zero
@@ -637,9 +731,9 @@ mod tests {
         // when building the report.
         let mount = test_mount();
         let mut agg = MountAggregator::new(&mount, String::new(), String::new());
-        agg.record(&[delta("READ", 100, 50, 3, 7)]);
+        agg.record(&[delta("READ", 100, 50, 3, 7)], 1.0);
 
-        let report = agg.finalise(1, None);
+        let report = agg.finalise(None);
         assert_eq!(report.operations[0].retrans, 3);
         assert_eq!(report.operations[0].timeouts, 7);
         assert_eq!(report.summary.retrans, 3);
@@ -650,13 +744,16 @@ mod tests {
     fn aggregator_sorts_operations_by_ops_descending() {
         let mount = test_mount();
         let mut agg = MountAggregator::new(&mount, String::new(), String::new());
-        agg.record(&[
-            delta("GETATTR", 500, 250, 0, 0),
-            delta("READ", 2000, 1000, 0, 0),
-            delta("WRITE", 800, 400, 0, 0),
-        ]);
+        agg.record(
+            &[
+                delta("GETATTR", 500, 250, 0, 0),
+                delta("READ", 2000, 1000, 0, 0),
+                delta("WRITE", 800, 400, 0, 0),
+            ],
+            10.0,
+        );
 
-        let report = agg.finalise(10, None);
+        let report = agg.finalise(None);
         let names: Vec<&str> = report.operations.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(names, vec!["READ", "WRITE", "GETATTR"]);
     }
@@ -708,7 +805,7 @@ mod tests {
         agg.record_xprt(&xprt_delta(1000, 1000, 0, 500, 100, 16));
         agg.record_xprt(&xprt_delta(500, 500, 100, 500, 200, 32));
 
-        let report = agg.finalise(10, Some(65536));
+        let report = agg.finalise(Some(65536));
         let xprt = report.xprt.as_ref().expect("xprt report should be present");
 
         assert_eq!(xprt.protocol, "tcp");
@@ -735,7 +832,7 @@ mod tests {
         // so the distinction is load-bearing.
         let mount = test_mount();
         let agg = MountAggregator::new(&mount, String::new(), String::new());
-        let report = agg.finalise(10, Some(65536));
+        let report = agg.finalise(Some(65536));
         assert!(report.xprt.is_none());
 
         let json = serde_json::to_string(&report).expect("serialise");
@@ -760,7 +857,7 @@ mod tests {
         bogus.protocol = "rdma".to_string();
         agg.record_xprt(&bogus);
 
-        let report = agg.finalise(10, None);
+        let report = agg.finalise(None);
         let xprt = report
             .xprt
             .as_ref()
@@ -824,7 +921,7 @@ mod tests {
         delta.nconnect = 16;
         agg.record_xprt(&delta);
 
-        let report = agg.finalise(10, None);
+        let report = agg.finalise(None);
         assert_eq!(report.xprt.as_ref().unwrap().nconnect, 16);
     }
 
@@ -832,7 +929,7 @@ mod tests {
     fn aggregator_empty_session_produces_empty_report() {
         let mount = test_mount();
         let agg = MountAggregator::new(&mount, "nfs4".into(), "rw".into());
-        let report = agg.finalise(10, None);
+        let report = agg.finalise(None);
 
         assert_eq!(report.summary.total_ops, 0);
         assert_eq!(report.summary.ops_per_sec, 0.0);

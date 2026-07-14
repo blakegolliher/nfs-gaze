@@ -448,6 +448,7 @@ mod tests {
                 mount_point: "/mnt/nfs".to_string(),
                 fstype: "nfs4".to_string(),
                 options: String::new(),
+                covered_sec: duration_sec as f64,
                 summary: SummaryStats {
                     total_ops,
                     ops_per_sec,
@@ -526,6 +527,7 @@ mod tests {
                     mount_point: "/mnt/a".into(),
                     fstype: String::new(),
                     options: String::new(),
+                    covered_sec: 0.0,
                     summary: SummaryStats {
                         total_ops: 0,
                         ops_per_sec: 0.0,
@@ -541,6 +543,7 @@ mod tests {
                     mount_point: "/mnt/b".into(),
                     fstype: String::new(),
                     options: String::new(),
+                    covered_sec: 0.0,
                     summary: SummaryStats {
                         total_ops: 0,
                         ops_per_sec: 0.0,
