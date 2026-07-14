@@ -46,9 +46,13 @@ pub struct Report {
     pub duration_sec: u64,
     /// Sampling interval in seconds.
     pub interval_sec: u64,
-    /// Number of non-seed samples folded into the aggregation. May be
-    /// less than `duration_sec / interval_sec` if some intervals were
-    /// dropped due to counter resets or parse errors.
+    /// Number of non-seed intervals whose deltas were folded into at
+    /// least one mount's aggregation. Intervals dropped whole — a
+    /// counter reset on the only monitored mount, the `-m` target
+    /// being absent, a parse failure — do not count, so this may be
+    /// less than `duration_sec / interval_sec`. With several mounts
+    /// this is a session-level count, not per-mount; per-mount
+    /// coverage is [`MountReport::covered_sec`].
     pub samples: u64,
     /// One entry per monitored mount, in a stable order (sorted by
     /// device string).

@@ -280,7 +280,11 @@ impl Monitor {
 
             let timestamp = Utc::now();
 
-            // Process each monitored mount
+            // Process each monitored mount. `interval_recorded`
+            // tracks whether this interval actually folded into at
+            // least one aggregator — intervals dropped whole (age
+            // reset, target mount absent) must not count as samples.
+            let mut interval_recorded = false;
             for current_mount in &current_monitor_mounts {
                 if let Some(previous_mount) = previous_mounts.get(&current_mount.mount_point) {
                     // Age moving backwards means the mount was
@@ -329,6 +333,7 @@ impl Monitor {
                             // idle sample contributes elapsed time
                             // and nothing else.
                             agg.record(&delta_stats, elapsed_seconds);
+                            interval_recorded = true;
                             // xprt folds into the same aggregator so
                             // the finalised MountReport carries a
                             // matching XprtReport. Recorded even
@@ -386,7 +391,9 @@ impl Monitor {
             }
 
             if output_mode {
-                samples_collected += 1;
+                if interval_recorded {
+                    samples_collected += 1;
+                }
                 let elapsed_secs = loop_start.elapsed().as_secs();
                 // Carriage return without newline so each update
                 // overwrites the previous progress line. Flush
@@ -877,6 +884,10 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
             mount.covered_sec > 0.0,
             "covered_sec must reflect measured intervals: {json}"
         );
+        assert!(
+            report.samples >= 1,
+            "recorded intervals must be counted as samples: {json}"
+        );
         assert_eq!(
             mount.fstype, "nfs",
             "fstype from the device line must land in the report: {json}"
@@ -902,6 +913,71 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
             mount.covered_sec,
             mount.summary.total_ops
         );
+    }
+
+    #[test]
+    fn test_report_samples_counts_only_intervals_that_folded() {
+        use tempfile::TempDir;
+
+        // The -m target exists at session start (so the aggregator is
+        // allocated) and then vanishes from mountstats for the entire
+        // capture. Nothing can fold, so the report must say 0 samples
+        // and 0 covered seconds — the old per-iteration counter would
+        // have reported one "sample" per loop pass, promising data
+        // the report does not contain.
+        let dir = TempDir::new().expect("create tempdir");
+        let path = dir.path().join("mountstats");
+        let report_path = dir.path().join("report.json");
+        write_single_mount_stats(&path, 1000, 100);
+
+        let initial_mounts = crate::parser::parse_mountstats(path.to_str().expect("utf-8 path"))
+            .expect("initial parse");
+        let monitor_mounts =
+            Monitor::get_mounts_to_monitor(Some("/mnt/a".to_string()), &initial_mounts)
+                .expect("mount filter matches");
+
+        // Unmount simulation: only a non-NFS filesystem remains.
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, "device /dev/sda1 mounted on /boot with fstype ext4\n")
+            .expect("write temp mountstats");
+        std::fs::rename(&tmp, &path).expect("rename mountstats into place");
+
+        let monitor = Monitor::new();
+        let mut output = Vec::<u8>::new();
+        monitor
+            .monitoring_loop(
+                &mut output,
+                MonitorConfig {
+                    mountstats_path: path.to_str().expect("utf-8 path"),
+                    monitor_mounts,
+                    mount_point: Some("/mnt/a".to_string()),
+                    operations_filter: HashSet::new(),
+                    interval: Duration::from_millis(100),
+                    count: 0,
+                    duration: Some(Duration::from_millis(500)),
+                    output: Some(report_path.clone()),
+                    slot_cap: None,
+                    show_bandwidth: false,
+                    clear_screen: false,
+                    metrics_manager: None,
+                },
+            )
+            .expect("loop should exit cleanly");
+
+        let json = std::fs::read_to_string(&report_path).expect("read report file");
+        let report: crate::snapshot::Report =
+            serde_json::from_str(&json).expect("report must be valid JSON");
+        assert_eq!(
+            report.samples, 0,
+            "no interval folded, so no interval may be counted: {json}"
+        );
+        let mount = report
+            .mounts
+            .iter()
+            .find(|m| m.mount_point == "/mnt/a")
+            .expect("aggregator was allocated at session start");
+        assert_eq!(mount.covered_sec, 0.0, "nothing recorded: {json}");
+        assert_eq!(mount.summary.total_ops, 0, "nothing recorded: {json}");
     }
 
     /// Single-mount writer simulating a stalled mount: the READ op
