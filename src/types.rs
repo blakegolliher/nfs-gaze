@@ -115,6 +115,14 @@ pub struct NFSEvents {
 /// - `pending_u` — cumulative time waiting for a reply from the
 ///   server. High pending + low sending means the bottleneck is
 ///   the server or the network, not the client.
+///
+/// Mounts using `nconnect=N` open N connections and the kernel prints
+/// one `xprt:` line per connection. This struct holds the *mount-wide
+/// aggregate*: cumulative counters are summed across connections,
+/// `max_slots` is the maximum of the per-connection high-water marks
+/// (the slot cap applies per transport, so max — not sum — is what
+/// compares against the cap), and [`Self::nconnect`] records how many
+/// transport lines were folded in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct XprtStats {
     /// Transport protocol tag: `"tcp"`, `"udp"`, or `"rdma"`.
@@ -133,12 +141,35 @@ pub struct XprtStats {
     /// Cumulative backlog queue length — see type-level docs.
     pub bklog_u: i64,
     /// High water mark of slots used (not a cumulative counter; it
-    /// only moves upward over the lifetime of the mount).
+    /// only moves upward over the lifetime of the mount). Across
+    /// multiple connections this is the per-connection maximum.
     pub max_slots: i64,
     /// Cumulative "sending" state dwell — see type-level docs.
     pub sending_u: i64,
     /// Cumulative "pending" state dwell — see type-level docs.
     pub pending_u: i64,
+    /// Number of transport connections folded into this aggregate
+    /// (`nconnect=N` mounts have N `xprt:` lines; plain mounts 1).
+    pub nconnect: i64,
+}
+
+impl XprtStats {
+    /// Fold another connection's stats into this mount-wide aggregate:
+    /// cumulative counters add, the slot high-water mark takes the
+    /// max, and the connection count grows. Callers must ensure both
+    /// sides use the same protocol (the kernel cannot mix transports
+    /// within one mount).
+    pub(crate) fn absorb(&mut self, other: &XprtStats) {
+        self.sends += other.sends;
+        self.recvs += other.recvs;
+        self.bad_xids += other.bad_xids;
+        self.req_u += other.req_u;
+        self.bklog_u += other.bklog_u;
+        self.sending_u += other.sending_u;
+        self.pending_u += other.pending_u;
+        self.max_slots = self.max_slots.max(other.max_slots);
+        self.nconnect += other.nconnect;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -187,10 +218,14 @@ pub struct DeltaXprtStats {
     pub delta_bklog: i64,
     pub delta_sending: i64,
     pub delta_pending: i64,
-    /// Current high-water mark for slots actually used. This is a
-    /// monotonic gauge — not a delta — and is carried forward so
-    /// callers can compare against the configured slot cap.
+    /// Current high-water mark for slots actually used (max across
+    /// connections on nconnect mounts). This is a monotonic gauge —
+    /// not a delta — and is carried forward so callers can compare
+    /// against the configured slot cap.
     pub max_slots: i64,
+    /// Number of transport connections behind these numbers, carried
+    /// forward from the current sample.
+    pub nconnect: i64,
     pub bklog_per_req: f64,
     pub sending_per_req: f64,
     pub pending_per_req: f64,

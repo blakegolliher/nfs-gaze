@@ -161,6 +161,14 @@ pub fn calculate_xprt_delta(
         return None;
     }
 
+    // A change in connection count means the mount was reconfigured
+    // (nconnect is fixed at mount time), so the two aggregates do not
+    // describe the same set of transports. Drop the interval; the
+    // next sample rebases cleanly.
+    if previous.nconnect != current.nconnect {
+        return None;
+    }
+
     if current.sends < previous.sends
         || current.recvs < previous.recvs
         || current.bad_xids < previous.bad_xids
@@ -196,6 +204,7 @@ pub fn calculate_xprt_delta(
         delta_sending,
         delta_pending,
         max_slots: current.max_slots,
+        nconnect: current.nconnect,
         bklog_per_req,
         sending_per_req,
         pending_per_req,
@@ -460,6 +469,7 @@ mod tests {
             max_slots,
             sending_u,
             pending_u,
+            nconnect: 1,
         }
     }
 
@@ -519,6 +529,35 @@ mod tests {
             ..make_xprt(11_000, 10_998, 11_000, 100, 50_000, 200_000, 32)
         };
         assert!(calculate_xprt_delta(Some(&prev), Some(&curr)).is_none());
+    }
+
+    #[test]
+    fn test_xprt_delta_returns_none_on_nconnect_change() {
+        // nconnect is fixed at mount time, so a change means the two
+        // aggregates describe different transport sets (remount).
+        // Even with counters that look monotonic, the interval must
+        // be dropped.
+        let prev = make_xprt(10_000, 9_998, 10_000, 100, 50_000, 200_000, 32);
+        let curr = XprtStats {
+            nconnect: 16,
+            ..make_xprt(11_000, 10_998, 11_000, 300, 50_500, 200_300, 48)
+        };
+        assert!(calculate_xprt_delta(Some(&prev), Some(&curr)).is_none());
+    }
+
+    #[test]
+    fn test_xprt_delta_carries_nconnect_forward() {
+        let prev = XprtStats {
+            nconnect: 16,
+            ..make_xprt(10_000, 9_998, 10_000, 100, 50_000, 200_000, 32)
+        };
+        let curr = XprtStats {
+            nconnect: 16,
+            ..make_xprt(11_000, 10_998, 11_000, 300, 50_500, 200_300, 48)
+        };
+        let delta = calculate_xprt_delta(Some(&prev), Some(&curr)).expect("delta computed");
+        assert_eq!(delta.nconnect, 16);
+        assert_eq!(delta.delta_sends, 1000);
     }
 
     #[test]

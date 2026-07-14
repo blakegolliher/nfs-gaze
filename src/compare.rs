@@ -606,6 +606,7 @@ mod tests {
     fn xprt(bklog: f64, sending: f64, pending: f64, max_slots: i64) -> XprtReport {
         XprtReport {
             protocol: "tcp".to_string(),
+            nconnect: 1,
             max_slots,
             slot_cap: Some(65536),
             sends: 100,

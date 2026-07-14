@@ -80,6 +80,11 @@ pub fn display_stats_simple<W: Write>(
 /// read). The `bklog_per_req` field uses three decimal places
 /// because it is usually very small but its transition from 0.000
 /// to anything non-zero is the signal we most care about.
+///
+/// On `nconnect` mounts a `(N conns)` note follows the slot figures:
+/// the counters are mount-wide sums across all N connections, while
+/// the slot high-water mark is the per-connection maximum (the cap
+/// applies per transport).
 pub fn display_xprt_summary<W: Write>(
     writer: &mut W,
     delta: &DeltaXprtStats,
@@ -89,12 +94,18 @@ pub fn display_xprt_summary<W: Write>(
         Some(c) => c.to_string(),
         None => "?".to_string(),
     };
+    let conns = if delta.nconnect > 1 {
+        format!(" ({} conns)", delta.nconnect)
+    } else {
+        String::new()
+    };
     writeln!(
         writer,
-        "xprt {} slots {}/{}  bklog {:.3}/req  sending {:.2}/req  pending {:.2}/req",
+        "xprt {} slots {}/{}{}  bklog {:.3}/req  sending {:.2}/req  pending {:.2}/req",
         delta.protocol,
         delta.max_slots,
         cap_display,
+        conns,
         delta.bklog_per_req,
         delta.sending_per_req,
         delta.pending_per_req,
@@ -197,6 +208,7 @@ mod tests {
             delta_sending: 820,
             delta_pending: 8398,
             max_slots: 7091,
+            nconnect: 1,
             bklog_per_req: 0.005,
             sending_per_req: 0.82,
             pending_per_req: 83.98,
@@ -224,6 +236,33 @@ mod tests {
     }
 
     #[test]
+    fn test_display_xprt_summary_shows_connection_count_when_nconnect() {
+        let delta = DeltaXprtStats {
+            protocol: "tcp".to_string(),
+            delta_sends: 1000,
+            delta_recvs: 1000,
+            delta_bad_xids: 0,
+            delta_req: 1000,
+            delta_bklog: 0,
+            delta_sending: 300,
+            delta_pending: 4500,
+            max_slots: 3,
+            nconnect: 16,
+            bklog_per_req: 0.0,
+            sending_per_req: 0.3,
+            pending_per_req: 4.5,
+        };
+        let mut buf = Vec::<u8>::new();
+        display_xprt_summary(&mut buf, &delta, Some(65536)).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(
+            out.contains("slots 3/65536 (16 conns)"),
+            "nconnect mounts must surface the connection count: {out}"
+        );
+    }
+
+    #[test]
     fn test_display_xprt_summary_unknown_slot_cap_shows_question_mark() {
         let delta = DeltaXprtStats {
             protocol: "tcp".to_string(),
@@ -235,6 +274,7 @@ mod tests {
             delta_sending: 0,
             delta_pending: 0,
             max_slots: 16,
+            nconnect: 1,
             bklog_per_req: 0.0,
             sending_per_req: 0.0,
             pending_per_req: 0.0,

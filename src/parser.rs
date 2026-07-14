@@ -354,6 +354,12 @@ impl MountstatsParser {
         // fields. We handle TCP in full; UDP and RDMA have different
         // layouts and are left unparsed so downstream code can tell
         // "no data" apart from "data layout I do not understand".
+        //
+        // Mounts using `nconnect=N` print one xprt line per
+        // connection; each recognised line is folded into the
+        // mount-wide aggregate (see [`XprtStats::absorb`]) so the
+        // reported transport numbers describe the whole mount, not
+        // just whichever connection happened to be printed last.
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 2 {
             return;
@@ -372,8 +378,18 @@ impl MountstatsParser {
             _ => None,
         };
 
-        if let (Some(xprt), Some(mount)) = (xprt, self.current_mount.as_mut()) {
-            mount.xprt = Some(xprt);
+        if let (Some(new), Some(mount)) = (xprt, self.current_mount.as_mut()) {
+            match mount.xprt.as_mut() {
+                None => mount.xprt = Some(new),
+                Some(acc) if acc.protocol == new.protocol => acc.absorb(&new),
+                // The kernel cannot mix transport protocols within a
+                // single mount; if it ever appears to, keep the first
+                // protocol's aggregate rather than corrupting it.
+                Some(_) => warn_once(
+                    "xprt-protocol-mix",
+                    &format!("ignoring xprt line with mismatched protocol: {}", line),
+                ),
+            }
         }
     }
 
@@ -437,6 +453,7 @@ fn parse_tcp_xprt(parts: &[&str]) -> Option<XprtStats> {
         max_slots: field(12)?,
         sending_u: field(13)?,
         pending_u: field(14)?,
+        nconnect: 1,
     })
 }
 
@@ -817,6 +834,50 @@ READ: 100 95 5 1024 2048 10 20 30 2
         assert_eq!(xprt.max_slots, 7091);
         assert_eq!(xprt.sending_u, 820821642);
         assert_eq!(xprt.pending_u, 83982296098);
+    }
+
+    #[test]
+    fn test_parse_xprt_nconnect_lines_are_summed_not_last_wins() {
+        // nconnect=N mounts print one xprt line per connection. The
+        // mount-wide aggregate must sum the cumulative counters, take
+        // the max of the per-connection slot HWMs, and count the
+        // connections. (The original bug kept only the last line,
+        // silently dropping N-1 transports.)
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+xprt:	tcp 904 1 8 0 0 1000 990 1 1010 5 4 30 500
+xprt:	tcp 905 1 8 0 0 2000 1980 2 2020 10 6 40 600
+xprt:	tcp 906 1 8 0 0 3000 2970 3 3030 15 2 50 700
+per-op statistics
+READ: 100 95 5 1024 2048 10 20 30 2
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        let xprt = mounts["/mnt/nfs"].xprt.as_ref().expect("xprt aggregated");
+
+        assert_eq!(xprt.nconnect, 3);
+        assert_eq!(xprt.sends, 6000, "sends must be summed across connections");
+        assert_eq!(xprt.recvs, 5940);
+        assert_eq!(xprt.bad_xids, 6);
+        assert_eq!(xprt.req_u, 6060);
+        assert_eq!(xprt.bklog_u, 30);
+        assert_eq!(xprt.sending_u, 120);
+        assert_eq!(xprt.pending_u, 1800);
+        assert_eq!(
+            xprt.max_slots, 6,
+            "slot HWM is the per-connection max, not a sum — the cap applies per transport"
+        );
+    }
+
+    #[test]
+    fn test_parse_xprt_single_line_has_nconnect_one() {
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+xprt:	tcp 904 1 8 0 0 1000 990 1 1010 5 4 30 500
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        assert_eq!(mounts["/mnt/nfs"].xprt.as_ref().unwrap().nconnect, 1);
     }
 
     #[test]

@@ -304,6 +304,7 @@ mod prometheus_tests {
             delta_sending: 820,
             delta_pending: 8398,
             max_slots: 7091,
+            nconnect: 1,
             bklog_per_req: 0.05,
             sending_per_req: 0.82,
             pending_per_req: 8.398,

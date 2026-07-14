@@ -56,10 +56,22 @@ fn corpus_nfs3_nconnect16_parses_fully() {
     // The v3 per-op table has 22 operations (NULL through COMMIT).
     assert_eq!(mount.operations.len(), 22);
 
-    assert!(
-        mount.xprt.is_some(),
-        "TCP xprt lines must be parsed on this mount"
-    );
+    // The mount uses nconnect=16: sixteen xprt lines, one per
+    // connection, which must be aggregated mount-wide. Expected sums
+    // were computed independently from the raw fixture with awk.
+    let xprt = mount
+        .xprt
+        .as_ref()
+        .expect("TCP xprt lines must be parsed on this mount");
+    assert_eq!(xprt.nconnect, 16);
+    assert_eq!(xprt.sends, 361460);
+    assert_eq!(xprt.recvs, 361460);
+    assert_eq!(xprt.bad_xids, 0);
+    assert_eq!(xprt.req_u, 362021);
+    assert_eq!(xprt.bklog_u, 0);
+    assert_eq!(xprt.sending_u, 777);
+    assert_eq!(xprt.pending_u, 173);
+    assert_eq!(xprt.max_slots, 3, "max of per-connection HWMs");
 }
 
 #[test]

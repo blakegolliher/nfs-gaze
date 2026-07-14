@@ -22,6 +22,13 @@ use std::collections::HashMap;
 /// values they do not understand.
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
+/// Serde default for [`XprtReport::nconnect`]: reports written before
+/// the field existed were produced by a parser that kept exactly one
+/// connection's counters, so 1 is the accurate backfill.
+fn default_nconnect() -> i64 {
+    1
+}
+
 /// A full capture-session report.
 ///
 /// Produced by aggregating per-interval [`crate::types::DeltaStats`]
@@ -87,9 +94,17 @@ pub struct MountReport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XprtReport {
     pub protocol: String,
+    /// Number of transport connections behind the aggregated numbers
+    /// (`nconnect=N` mounts have N). Defaults to 1 when reading
+    /// reports written before this field existed — those aggregates
+    /// genuinely described a single connection.
+    #[serde(default = "default_nconnect")]
+    pub nconnect: i64,
     /// High-water mark of slots actually used, across the session.
-    /// Carried forward from the kernel gauge rather than derived
-    /// from deltas (it is monotonically non-decreasing by design).
+    /// On multi-connection mounts this is the per-connection maximum
+    /// (the slot cap applies per transport). Carried forward from
+    /// the kernel gauge rather than derived from deltas (it is
+    /// monotonically non-decreasing by design).
     pub max_slots: i64,
     /// Configured cap from `/proc/sys/sunrpc/tcp_max_slot_table_entries`
     /// at capture time, when readable. Omitted from the JSON
@@ -203,6 +218,10 @@ struct XprtAccumulator {
     sending_total: i64,
     pending_total: i64,
     max_slots_hwm: i64,
+    /// Highest connection count seen across the session. Constant in
+    /// practice (nconnect is fixed at mount time); max() is a cheap
+    /// defence if a remount mid-session changes it.
+    nconnect_max: i64,
 }
 
 impl MountAggregator {
@@ -241,6 +260,7 @@ impl MountAggregator {
             sending_total: 0,
             pending_total: 0,
             max_slots_hwm: 0,
+            nconnect_max: 0,
         });
         if acc.protocol != delta.protocol {
             return;
@@ -254,6 +274,9 @@ impl MountAggregator {
         acc.pending_total += delta.delta_pending;
         if delta.max_slots > acc.max_slots_hwm {
             acc.max_slots_hwm = delta.max_slots;
+        }
+        if delta.nconnect > acc.nconnect_max {
+            acc.nconnect_max = delta.nconnect;
         }
     }
 
@@ -365,6 +388,7 @@ impl MountAggregator {
             let safe = |n: i64| if req_f > 0.0 { n as f64 / req_f } else { 0.0 };
             XprtReport {
                 protocol: acc.protocol,
+                nconnect: acc.nconnect_max.max(1),
                 max_slots: acc.max_slots_hwm,
                 slot_cap,
                 sends: acc.sends_total,
@@ -655,6 +679,7 @@ mod tests {
             delta_sending,
             delta_pending,
             max_slots,
+            nconnect: 1,
             bklog_per_req: if delta_req > 0 {
                 delta_bklog as f64 / delta_req as f64
             } else {
@@ -753,6 +778,7 @@ mod tests {
         // unknown" by presence/absence of the field.
         let report = XprtReport {
             protocol: "tcp".into(),
+            nconnect: 1,
             max_slots: 42,
             slot_cap: None,
             sends: 100,
@@ -769,6 +795,37 @@ mod tests {
         );
         let parsed: XprtReport = serde_json::from_str(&json).expect("round-trip");
         assert_eq!(parsed, report);
+    }
+
+    #[test]
+    fn xprt_report_nconnect_defaults_to_one_for_old_json() {
+        // Reports written before the nconnect field existed must
+        // deserialise with nconnect = 1: the old parser kept exactly
+        // one connection's counters, so 1 describes that data.
+        let json = r#"{
+            "protocol": "tcp",
+            "max_slots": 42,
+            "sends": 100,
+            "recvs": 100,
+            "bad_xids": 0,
+            "bklog_per_req": 0.0,
+            "sending_per_req": 0.0,
+            "pending_per_req": 0.0
+        }"#;
+        let parsed: XprtReport = serde_json::from_str(json).expect("old JSON must deserialise");
+        assert_eq!(parsed.nconnect, 1);
+    }
+
+    #[test]
+    fn aggregator_carries_nconnect_into_report() {
+        let mount = test_mount();
+        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut delta = xprt_delta(1000, 1000, 0, 500, 100, 16);
+        delta.nconnect = 16;
+        agg.record_xprt(&delta);
+
+        let report = agg.finalise(10, None);
+        assert_eq!(report.xprt.as_ref().unwrap().nconnect, 16);
     }
 
     #[test]
