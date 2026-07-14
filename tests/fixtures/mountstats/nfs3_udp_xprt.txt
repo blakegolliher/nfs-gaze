@@ -1,0 +1,13 @@
+device server:/export mounted on /mnt/udp with fstype nfs statvers=1.1
+	opts:	rw,vers=3,rsize=32768,wsize=32768,namlen=255,hard,proto=udp,timeo=11,retrans=3,sec=sys
+	age:	100
+	caps:	caps=0xf,wtmult=4096,dtsize=32768,bsize=0,namlen=255
+	sec:	flavor=1,pseudoflavor=1
+	events:	10 20 0 0 5 2 5 0 0 0 0 0 0 0 3 0 0 3 0 0 0 0 0 0 0 0 0
+	bytes:	1048576 0 0 0 1048576 0 256 0
+	RPC iostats version: 1.1  p/v: 100003/3 (nfs)
+	xprt:	udp 723 1000 1000 0 1010 5 3 0
+	per-op statistics
+	        NULL: 0 0 0 0 0 0 0 0
+	     GETATTR: 10 10 0 1120 1200 2 5 8
+	        READ: 256 256 0 41984 1049600 4 318 330

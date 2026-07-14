@@ -1,0 +1,17 @@
+device filer01:/vol/data mounted on /mnt/data with fstype nfs4 statvers=1.1
+	opts:	rw,vers=4.1,rsize=1048576,wsize=1048576,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys
+	age:	86400
+	impl_id:	name='NetApp Release 9.9.1P3',domain='netapp.com',date='1616445222,0'
+	caps:	caps=0x3fff7,wtmult=512,dtsize=32768,bsize=0,namlen=255
+	nfsv4:	bm0=0xfdffbfff,bm1=0x40f9be3e,bm2=0x803,acl=0x3,sessions,pnfs=not configured,lease_time=90,lease_expired=0
+	sec:	flavor=1,pseudoflavor=1
+	events:	54 1801 0 0 5 22 51 0 0 5 0 10 0 0 3 3 0 3 0 0 5 0 0 0 0 0 0
+	bytes:	532480 1048576 0 0 532480 1048576 130 256
+	RPC iostats version: 1.1  p/v: 100003/4 (nfs)
+	xprt:	tcp 883 0 2 0 8 20183 20183 0 20221 0 6 20124 18492
+	per-op statistics
+	        NULL: 0 0 0 0 0 0 0 0 0
+	        READ: 130 130 0 21320 546160 4 318 330 0
+	       WRITE: 256 256 0 1090304 44288 27 6702 6746 0
+	      COMMIT: 4 4 0 704 448 0 4 4 0
+	        OPEN: 5 5 0 1520 2340 0 4 5 0

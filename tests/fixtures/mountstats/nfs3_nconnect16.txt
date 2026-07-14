@@ -1,0 +1,48 @@
+device nfs-server01.example.com:/export/data mounted on /mnt/data with fstype nfs statvers=1.1
+	opts:	rw,vers=3,rsize=1048576,wsize=1048576,namlen=255,acregmin=3,acregmax=60,acdirmin=30,acdirmax=60,hard,rdirplus=force,forcerdirplus,proto=tcp,nconnect=16,timeo=600,retrans=2,sec=sys,mountaddr=172.200.203.1,mountvers=3,mountport=20048,mountproto=udp,local_lock=none
+	age:	2286024
+	caps:	caps=0xf,wtmult=4096,dtsize=131072,bsize=0,namlen=255
+	sec:	flavor=1,pseudoflavor=1
+	events:	39919 159557 0 16 40073 297 160601 0 0 0 0 0 0 0 40052 0 0 40052 0 0 0 0 0 0 0 0 0 
+	bytes:	0 0 183766089728 152135794688 183766089728 152135794688 0 0 
+	RPC iostats version: 1.1  p/v: 100003/3 (nfs)
+	xprt:	tcp 904 1 8 0 0 22598 22598 0 22645 0 2 60 17
+	xprt:	tcp 958 1 8 0 0 22603 22603 0 22627 0 2 35 8
+	xprt:	tcp 703 1 8 11 0 22573 22573 0 22601 0 2 35 10
+	xprt:	tcp 834 1 8 11 0 22580 22580 0 22610 0 2 36 12
+	xprt:	tcp 895 1 8 11 0 22552 22552 0 22595 0 3 65 11
+	xprt:	tcp 815 1 8 0 0 22611 22611 0 22642 0 2 46 8
+	xprt:	tcp 868 1 8 0 0 22592 22592 0 22632 0 2 54 13
+	xprt:	tcp 886 1 8 11 0 22590 22590 0 22635 0 2 57 16
+	xprt:	tcp 670 1 10 11 0 22539 22539 0 22568 0 2 48 5
+	xprt:	tcp 915 1 10 0 0 22578 22578 0 22608 0 2 46 7
+	xprt:	tcp 708 1 10 0 0 22632 22632 0 22671 0 2 48 15
+	xprt:	tcp 853 1 10 0 0 22604 22604 0 22640 0 2 59 6
+	xprt:	tcp 908 1 10 0 0 22601 22601 0 22635 0 2 36 16
+	xprt:	tcp 873 1 10 11 0 22608 22608 0 22652 0 2 63 12
+	xprt:	tcp 801 1 8 0 0 22586 22586 0 22613 0 2 38 8
+	xprt:	tcp 816 1 8 0 0 22613 22613 0 22647 0 2 51 9
+	per-op statistics
+	        NULL: 1 1 0 44 24 2 0 2 0
+	     GETATTR: 39919 39919 0 4311116 4469584 67818 26644 98396 16
+	     SETATTR: 0 0 0 0 0 0 0 0 0
+	      LOOKUP: 297 297 0 35488 66528 28 203 256 0
+	      ACCESS: 898 898 0 100560 107760 20 559 667 0
+	    READLINK: 0 0 0 0 0 0 0 0 0
+	        READ: 175253 175253 0 21030360 183788522112 13135 838601 863769 0
+	       WRITE: 145088 145088 0 152154365952 23214080 10016 362821 376072 0
+	      CREATE: 0 0 0 0 0 0 0 0 0
+	       MKDIR: 0 0 0 0 0 0 0 0 0
+	     SYMLINK: 0 0 0 0 0 0 0 0 0
+	       MKNOD: 0 0 0 0 0 0 0 0 0
+	      REMOVE: 0 0 0 0 0 0 0 0 0
+	       RMDIR: 0 0 0 0 0 0 0 0 0
+	      RENAME: 0 0 0 0 0 0 0 0 0
+	        LINK: 0 0 0 0 0 0 0 0 0
+	     READDIR: 0 0 0 0 0 0 0 0 0
+	 READDIRPLUS: 0 0 0 0 0 0 0 0 0
+	      FSSTAT: 0 0 0 0 0 0 0 0 0
+	      FSINFO: 2 2 0 216 328 1 0 3 0
+	    PATHCONF: 1 1 0 108 140 1 0 2 0
+	      COMMIT: 0 0 0 0 0 0 0 0 0
+

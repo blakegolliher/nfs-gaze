@@ -1,7 +1,8 @@
 use crate::types::{NFSEvents, NFSMount, NFSOperation, NfsGazeError, Result, XprtStats};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
+use std::sync::{Mutex, OnceLock};
 
 // Minimum number of fields required for parsing
 const MIN_EVENTS_FIELDS: usize = 25;
@@ -132,23 +133,52 @@ pub fn parse_nfs_operation(op_name: &str, stats: &[String]) -> Result<NFSOperati
     Ok(operation)
 }
 
-/// Helper to parse a field value from a whitespace-split line
-fn parse_field(value: &str, field: &str) -> Result<i64> {
-    value.parse().map_err(|e| NfsGazeError::FieldParseError {
-        field: field.to_string(),
-        source: e,
-    })
+/// Emit a diagnostic for skipped or unparseable input at most once per
+/// `key` for the lifetime of the process.
+///
+/// The monitoring loop re-parses `/proc/self/mountstats` every
+/// interval, so an unconditional `eprintln!` for a persistently odd
+/// line would repeat once per second forever. Deduplicating on a
+/// stable key (the line kind, or the operation name) keeps the signal
+/// without the spam. The set is bounded in practice: keys are drawn
+/// from line kinds and operation names, not raw line content.
+fn warn_once(key: &str, message: &str) {
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = match warned.lock() {
+        Ok(guard) => guard,
+        // A panic while holding this lock cannot corrupt a HashSet of
+        // Strings in a way that matters for dedup; keep warning.
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.insert(key.to_string()) {
+        eprintln!("nfs-gaze: {}", message);
+    }
 }
 
-/// Lines that look like "OP: stats..." but aren't actual NFS operations.
-/// Note that `xprt:` is *not* in this list — it has its own parser
-/// branch in `parse_stats_line` and populates `NFSMount::xprt`.
-const IGNORED_PREFIXES: &[&str] = &["RPC", "per-op", "opts", "caps", "sec", "nfsv4", "nfsv3"];
-
-/// Main mountstats parser
+/// Main mountstats parser.
+///
+/// # Robustness contract
+///
+/// `/proc/self/mountstats` mixes stat lines this tool consumes with
+/// metadata lines it does not (`opts:`, `caps:`, `sec:`, `impl_id:`,
+/// `nfsv4:`, `fsc:`, `RPC iostats version:`, ...), and kernels keep
+/// adding new ones. The parser therefore *never* fails the whole file
+/// because of a line it does not understand:
+///
+/// - Per-op statistics are only parsed inside the `per-op statistics`
+///   section (the kernel has printed that marker since 2006), so
+///   metadata lines can never be mistaken for operations.
+/// - A malformed line inside a recognised construct (a stats value
+///   that does not parse, a truncated per-op line) is skipped with a
+///   once-per-key warning on stderr rather than aborting.
+/// - Only I/O errors reading the file surface as `Err`.
 struct MountstatsParser {
     mounts: HashMap<String, NFSMount>,
     current_mount: Option<NFSMount>,
+    /// True once the `per-op statistics` marker of the current mount
+    /// block has been seen. Reset on every device line.
+    in_per_op_section: bool,
 }
 
 impl MountstatsParser {
@@ -156,6 +186,7 @@ impl MountstatsParser {
         Self {
             mounts: HashMap::new(),
             current_mount: None,
+            in_per_op_section: false,
         }
     }
 
@@ -169,41 +200,48 @@ impl MountstatsParser {
     fn parse<R: BufRead>(mut self, reader: R) -> Result<HashMap<String, NFSMount>> {
         for line in reader.lines() {
             let line = line?;
-            self.parse_line(&line)?;
+            self.parse_line(&line);
         }
         self.flush_current();
         Ok(self.mounts)
     }
 
-    fn parse_line(&mut self, line: &str) -> Result<()> {
+    fn parse_line(&mut self, line: &str) {
         let line = line.trim();
-        if line.starts_with("device") && line.contains("nfs") {
+        if line.starts_with("device ") {
+            // Every device line — NFS or not — terminates the previous
+            // mount's block, so a non-NFS mount between two NFS mounts
+            // cannot cause stats lines to bleed into the wrong mount.
             self.flush_current();
-            self.parse_device_line(line)?;
+            self.in_per_op_section = false;
+            if line.contains("nfs") {
+                self.parse_device_line(line);
+            }
         } else if self.current_mount.is_some() {
-            self.parse_stats_line(line)?;
+            self.parse_stats_line(line);
         }
-        Ok(())
     }
 
-    fn parse_device_line(&mut self, line: &str) -> Result<()> {
+    fn parse_device_line(&mut self, line: &str) {
         // Example: "device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1"
         let parts: Vec<&str> = line.splitn(2, " on ").collect();
         if parts.len() != 2 {
-            return Err(NfsGazeError::ParseError(format!(
-                "Invalid device line: {}",
-                line
-            )));
+            warn_once(
+                "device",
+                &format!("skipping unrecognised device line: {}", line),
+            );
+            return;
         }
 
         let device_info: Vec<&str> = parts[0].split_whitespace().collect();
         let mount_info: Vec<&str> = parts[1].split_whitespace().collect();
 
         if device_info.len() < 2 || mount_info.is_empty() {
-            return Err(NfsGazeError::ParseError(format!(
-                "Invalid device info: {}",
-                line
-            )));
+            warn_once(
+                "device",
+                &format!("skipping unrecognised device line: {}", line),
+            );
+            return;
         }
 
         let server_export = device_info[1];
@@ -226,140 +264,123 @@ impl MountstatsParser {
             bytes_write: 0,
             xprt: None,
         });
-        Ok(())
     }
 
-    fn parse_stats_line(&mut self, line: &str) -> Result<()> {
-        if line.starts_with("age:") {
-            self.parse_age(line)
+    fn parse_stats_line(&mut self, line: &str) {
+        if line.starts_with("per-op") {
+            self.in_per_op_section = true;
+        } else if line.starts_with("age:") {
+            self.parse_age(line);
         } else if line.starts_with("events:") {
-            self.parse_events_line(line)
+            self.parse_events_line(line);
         } else if line.starts_with("bytes:") {
-            self.parse_bytes(line)
+            self.parse_bytes(line);
         } else if line.starts_with("xprt:") {
-            self.parse_xprt(line)
-        } else if line.contains(':') && !IGNORED_PREFIXES.iter().any(|p| line.starts_with(p)) {
-            self.parse_operation(line)
-        } else {
-            Ok(())
+            self.parse_xprt(line);
+        } else if self.in_per_op_section && line.contains(':') {
+            self.parse_operation(line);
+        }
+        // Anything else — opts:, caps:, sec:, impl_id:, nfsv4:, fsc:,
+        // "RPC iostats version:", blank lines, and whatever future
+        // kernels add — is metadata this tool does not consume, and is
+        // ignored without ceremony. Only lines inside the per-op
+        // section are expected to be operations.
+    }
+
+    fn parse_age(&mut self, line: &str) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.get(1).and_then(|v| v.parse::<i64>().ok()) {
+            Some(age) => {
+                if let Some(ref mut mount) = self.current_mount {
+                    mount.age = age;
+                }
+            }
+            None => warn_once("age", &format!("skipping malformed age line: {}", line)),
         }
     }
 
-    fn parse_age(&mut self, line: &str) -> Result<()> {
+    fn parse_events_line(&mut self, line: &str) {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < MIN_KEY_VALUE_FIELDS {
-            return Err(NfsGazeError::ParseError(format!(
-                "Invalid age line: {}",
-                line
-            )));
-        }
-
-        if let Some(ref mut mount) = self.current_mount {
-            mount.age = parse_field(parts[1], "age")?;
-        }
-        Ok(())
-    }
-
-    fn parse_events_line(&mut self, line: &str) -> Result<()> {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < MIN_KEY_VALUE_FIELDS {
-            return Err(NfsGazeError::ParseError(format!(
-                "Invalid events line: {}",
-                line
-            )));
+            warn_once(
+                "events",
+                &format!("skipping malformed events line: {}", line),
+            );
+            return;
         }
 
         let event_parts: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
-        let events = parse_events(&event_parts)?;
-
-        if let Some(ref mut mount) = self.current_mount {
-            mount.events = Some(events);
+        match parse_events(&event_parts) {
+            Ok(events) => {
+                if let Some(ref mut mount) = self.current_mount {
+                    mount.events = Some(events);
+                }
+            }
+            Err(e) => warn_once(
+                "events",
+                &format!("skipping malformed events line ({}): {}", e, line),
+            ),
         }
-        Ok(())
     }
 
-    fn parse_bytes(&mut self, line: &str) -> Result<()> {
+    fn parse_bytes(&mut self, line: &str) {
         // Kernel format: "bytes: normalread normalwrite directread directwrite serverread serverwrite pagesread pageswrite"
         // Index:              1          2           3            4          5           6          7          8
         // bytes_read = index 1 (normalread), bytes_write = index 6 (serverwrite)
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < MIN_BYTES_FIELDS {
-            return Err(NfsGazeError::ParseError(format!(
-                "Invalid bytes line: {}",
-                line
-            )));
+            warn_once("bytes", &format!("skipping malformed bytes line: {}", line));
+            return;
         }
 
-        if let Some(ref mut mount) = self.current_mount {
-            mount.bytes_read = parse_field(parts[1], "bytes_read")?;
-            mount.bytes_write = match parts.get(6) {
-                Some(val) => parse_field(val, "bytes_write")?,
-                None => 0,
-            };
+        let read = parts[1].parse::<i64>();
+        // A short line missing the write field is tolerated as zero;
+        // a present-but-unparseable field is not silently zeroed.
+        let write = parts.get(6).map(|v| v.parse::<i64>()).transpose();
+        match (read, write) {
+            (Ok(read), Ok(write)) => {
+                if let Some(ref mut mount) = self.current_mount {
+                    mount.bytes_read = read;
+                    mount.bytes_write = write.unwrap_or(0);
+                }
+            }
+            _ => warn_once("bytes", &format!("skipping malformed bytes line: {}", line)),
         }
-        Ok(())
     }
 
-    fn parse_xprt(&mut self, line: &str) -> Result<()> {
+    fn parse_xprt(&mut self, line: &str) {
         // The line looks like `xprt:\ttcp 732 1 40 0 0 59381805 ...`
         // — one "xprt:" token, one protocol tag, then the numeric
         // fields. We handle TCP in full; UDP and RDMA have different
-        // layouts and are mapped to None so downstream code can tell
+        // layouts and are left unparsed so downstream code can tell
         // "no data" apart from "data layout I do not understand".
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 2 {
-            return Ok(()); // malformed, ignore rather than fail parsing
+            return;
         }
-        let protocol = parts[1];
 
-        let xprt = match protocol {
-            "tcp" if parts.len() > TCP_XPRT_FIELD_COUNT => {
-                // parts[0] = "xprt:", parts[1] = "tcp",
-                // parts[2..] = the 13 numeric fields. The fields we
-                // actually care about live at these offsets:
-                //
-                //   2   srcport
-                //   3   bind_count
-                //   4   connect_count
-                //   5   connect_time_ms
-                //   6   idle_time_s
-                //   7   sends
-                //   8   recvs
-                //   9   bad_xids
-                //   10  req_u
-                //   11  bklog_u
-                //   12  max_slots
-                //   13  sending_u
-                //   14  pending_u
-                Some(XprtStats {
-                    protocol: "tcp".to_string(),
-                    sends: parse_field(parts[7], "xprt_sends")?,
-                    recvs: parse_field(parts[8], "xprt_recvs")?,
-                    bad_xids: parse_field(parts[9], "xprt_bad_xids")?,
-                    req_u: parse_field(parts[10], "xprt_req_u")?,
-                    bklog_u: parse_field(parts[11], "xprt_bklog_u")?,
-                    max_slots: parse_field(parts[12], "xprt_max_slots")?,
-                    sending_u: parse_field(parts[13], "xprt_sending_u")?,
-                    pending_u: parse_field(parts[14], "xprt_pending_u")?,
-                })
-            }
-            // UDP and RDMA have different field layouts. Rather than
-            // partially populate the struct and hide that fact behind
-            // an "unknown" tag, we leave xprt as None so callers can
-            // clearly tell unparseable data from absent data.
+        let xprt = match parts[1] {
+            "tcp" if parts.len() > TCP_XPRT_FIELD_COUNT => match parse_tcp_xprt(&parts) {
+                Some(xprt) => Some(xprt),
+                None => {
+                    warn_once("xprt", &format!("skipping malformed xprt line: {}", line));
+                    None
+                }
+            },
+            // UDP and RDMA have different field layouts, and a TCP
+            // line with too few fields cannot be safely indexed.
             _ => None,
         };
 
-        if let Some(ref mut mount) = self.current_mount {
-            mount.xprt = xprt;
+        if let (Some(xprt), Some(mount)) = (xprt, self.current_mount.as_mut()) {
+            mount.xprt = Some(xprt);
         }
-        Ok(())
     }
 
-    fn parse_operation(&mut self, line: &str) -> Result<()> {
-        let (op_name, stats_str) = line
-            .split_once(':')
-            .ok_or_else(|| NfsGazeError::ParseError(format!("Invalid operation line: {}", line)))?;
+    fn parse_operation(&mut self, line: &str) {
+        let Some((op_name, stats_str)) = line.split_once(':') else {
+            return;
+        };
 
         let op_name = op_name.trim();
         let stats: Vec<String> = stats_str
@@ -367,13 +388,56 @@ impl MountstatsParser {
             .map(|s| s.to_string())
             .collect();
 
-        let operation = parse_nfs_operation(op_name, &stats)?;
-
-        if let Some(ref mut mount) = self.current_mount {
-            mount.operations.insert(op_name.to_string(), operation);
+        match parse_nfs_operation(op_name, &stats) {
+            Ok(operation) => {
+                if let Some(ref mut mount) = self.current_mount {
+                    mount.operations.insert(op_name.to_string(), operation);
+                }
+            }
+            Err(e) => warn_once(
+                &format!("op:{}", op_name),
+                &format!("skipping unparseable per-op line for '{}': {}", op_name, e),
+            ),
         }
-        Ok(())
     }
+}
+
+/// Parse the numeric fields of a TCP `xprt:` line.
+///
+/// `parts[0]` is the `xprt:` label, `parts[1]` the protocol tag, and
+/// `parts[2..]` the 13 numeric fields. The fields we care about live
+/// at these offsets:
+///
+/// ```text
+///   2   srcport
+///   3   bind_count
+///   4   connect_count
+///   5   connect_time_ms
+///   6   idle_time_s
+///   7   sends
+///   8   recvs
+///   9   bad_xids
+///   10  req_u
+///   11  bklog_u
+///   12  max_slots
+///   13  sending_u
+///   14  pending_u
+/// ```
+///
+/// Returns `None` if any field fails to parse as an integer.
+fn parse_tcp_xprt(parts: &[&str]) -> Option<XprtStats> {
+    let field = |index: usize| parts[index].parse::<i64>().ok();
+    Some(XprtStats {
+        protocol: "tcp".to_string(),
+        sends: field(7)?,
+        recvs: field(8)?,
+        bad_xids: field(9)?,
+        req_u: field(10)?,
+        bklog_u: field(11)?,
+        max_slots: field(12)?,
+        sending_u: field(13)?,
+        pending_u: field(14)?,
+    })
 }
 
 /// Parse mountstats from a file path
@@ -480,6 +544,7 @@ mod tests {
 age: 12345
 events: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
 bytes: 1048576 0 0 0 0 2097152 0 0
+per-op statistics
 READ: 100 95 5 1024 2048 10 20 30 2
 WRITE: 50 50 0 512 0 5 15 25 1
 "#;
@@ -508,10 +573,12 @@ WRITE: 50 50 0 512 0 5 15 25 1
     fn test_parse_mountstats_multiple_mounts() {
         let mountstats_data = r#"device server1:/export1 mounted on /mnt/nfs1 with fstype nfs statvers=1.1
 age: 1000
+per-op statistics
 READ: 10 10 0 100 200 1 2 3 0
 
 device server2:/export2 mounted on /mnt/nfs2 with fstype nfs statvers=1.1
 age: 2000
+per-op statistics
 WRITE: 20 20 0 300 400 2 3 4 0
 "#;
 
@@ -546,7 +613,7 @@ bytes: 1048576 0 0 0 0
     }
 
     #[test]
-    fn test_ignored_prefixes_are_skipped() {
+    fn test_metadata_lines_are_skipped() {
         // Real mountstats contain RPC, xprt, opts, caps, sec lines that should be skipped
         let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs4 statvers=1.1
         opts:   rw,vers=4.2,rsize=1048576,wsize=1048576
@@ -567,9 +634,153 @@ bytes: 1048576 0 0 0 0
     }
 
     #[test]
+    fn test_impl_id_line_does_not_abort_parse() {
+        // NFSv4.1+ mounts print an impl_id line when the server sends
+        // an implementation ID (NetApp, VAST, Isilon, ... all do).
+        // This used to hard-fail the entire parse — the tool would not
+        // even start. It must be ignored like any other metadata line.
+        let mountstats_data = r#"device filer01:/vol/data mounted on /mnt/data with fstype nfs4 statvers=1.1
+	opts:	rw,vers=4.1,rsize=1048576,wsize=1048576,namlen=255,hard,proto=tcp
+	age:	86400
+	impl_id:	name='NetApp Release 9.9.1P3',domain='netapp.com',date='1616445222,0'
+	caps:	caps=0x3fff7,wtmult=512,dtsize=32768,bsize=0,namlen=255
+	nfsv4:	bm0=0xfdffbfff,bm1=0x40f9be3e,bm2=0x803,acl=0x3,sessions,pnfs=not configured
+	sec:	flavor=1,pseudoflavor=1
+	per-op statistics
+	        READ: 130 130 0 21320 546160 4 318 330 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("impl_id must not abort the parse");
+        let mount = &mounts["/mnt/data"];
+        assert_eq!(mount.age, 86400);
+        assert_eq!(mount.operations["READ"].ops, 130);
+    }
+
+    #[test]
+    fn test_fsc_line_does_not_abort_parse() {
+        // fscache-enabled mounts on kernels <= 5.17 (including RHEL /
+        // Rocky 9's 5.14) print a five-field "fsc:" stats line. It
+        // used to hard-fail the entire parse.
+        let mountstats_data = r#"device server:/export mounted on /mnt/cached with fstype nfs statvers=1.1
+	age:	5000
+	bytes:	1048576 0 0 0 1048576 0 256 0
+	fsc:	204 0 0 0 12
+	per-op statistics
+	        READ: 256 256 0 41984 1049600 4 318 330
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("fsc must not abort the parse");
+        assert_eq!(mounts["/mnt/cached"].operations["READ"].ops, 256);
+    }
+
+    #[test]
+    fn test_ops_outside_per_op_section_are_not_parsed() {
+        // Colon-lines before the "per-op statistics" marker are
+        // metadata by the kernel's contract, never operations. Pin
+        // that so future refactors cannot regress to guess-parsing.
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+READ: 100 100 0 1024 2048 10 20 30 0
+per-op statistics
+WRITE: 50 50 0 512 0 5 15 25 1
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        let mount = &mounts["/mnt/nfs"];
+        assert!(
+            !mount.operations.contains_key("READ"),
+            "pre-marker colon-line must not be treated as an operation"
+        );
+        assert!(mount.operations.contains_key("WRITE"));
+    }
+
+    #[test]
+    fn test_bad_op_line_is_skipped_without_dropping_others() {
+        // A corrupt line inside the per-op section must lose only
+        // itself: every other operation still parses, and the parse
+        // as a whole succeeds.
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+per-op statistics
+READ: 100 100 0 1024 2048 10 20 30 0
+BROKEN: 1 2 three 4
+WRITE: 50 50 0 512 0 5 15 25 1
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("one bad op line must not abort");
+        let mount = &mounts["/mnt/nfs"];
+        assert_eq!(mount.operations.len(), 2);
+        assert!(mount.operations.contains_key("READ"));
+        assert!(mount.operations.contains_key("WRITE"));
+        assert!(!mount.operations.contains_key("BROKEN"));
+    }
+
+    #[test]
+    fn test_malformed_stat_lines_lose_only_their_field() {
+        // Malformed age / events / bytes lines skip the field but keep
+        // the mount and everything else in the file.
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: not-a-number
+events: 1 2 3
+bytes: garbage 0 0 0 0 0 0 0
+per-op statistics
+READ: 100 100 0 1024 2048 10 20 30 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("malformed stat lines must not abort");
+        let mount = &mounts["/mnt/nfs"];
+        assert_eq!(mount.age, 0);
+        assert!(mount.events.is_none());
+        assert_eq!(mount.bytes_read, 0);
+        assert_eq!(mount.operations["READ"].ops, 100);
+    }
+
+    #[test]
+    fn test_non_nfs_device_line_terminates_previous_block() {
+        // A non-NFS device line between two NFS mounts must close the
+        // first mount's block so no stats bleed across, and must not
+        // itself become a mount.
+        let mountstats_data = r#"device server1:/a mounted on /mnt/a with fstype nfs statvers=1.1
+age: 100
+per-op statistics
+READ: 10 10 0 100 200 1 2 3 0
+device /dev/sda1 mounted on /boot with fstype ext4
+device server2:/b mounted on /mnt/b with fstype nfs statvers=1.1
+age: 200
+per-op statistics
+WRITE: 20 20 0 300 400 2 3 4 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        assert_eq!(mounts.len(), 2);
+        assert!(mounts["/mnt/a"].operations.contains_key("READ"));
+        assert!(!mounts["/mnt/a"].operations.contains_key("WRITE"));
+        assert!(mounts["/mnt/b"].operations.contains_key("WRITE"));
+    }
+
+    #[test]
+    fn test_malformed_device_line_skips_block_but_keeps_other_mounts() {
+        // A device line that matches the NFS filter but cannot be
+        // split into device/mountpoint should drop only its own block.
+        let mountstats_data = r#"device nfs-garbage-without-mount-marker
+age: 999
+per-op statistics
+READ: 10 10 0 100 200 1 2 3 0
+device server:/b mounted on /mnt/b with fstype nfs statvers=1.1
+age: 200
+per-op statistics
+WRITE: 20 20 0 300 400 2 3 4 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("parse should succeed");
+        assert_eq!(mounts.len(), 1, "only the well-formed mount should survive");
+        assert_eq!(mounts["/mnt/b"].age, 200);
+    }
+
+    #[test]
     fn test_parse_operation_without_errors_field() {
         // Operations with only 8 fields (no errors) should still parse
-        let stats: Vec<String> = vec!["100", "95", "5", "1024", "2048", "10", "20", "30"]
+        let stats: Vec<String> = ["100", "95", "5", "1024", "2048", "10", "20", "30"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -586,6 +797,7 @@ bytes: 1048576 0 0 0 0
         let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
 age: 12345
 xprt:	tcp 732 1 40 0 0 59381805 59381803 2 84476199495 0 7091 820821642 83982296098
+per-op statistics
 READ: 100 95 5 1024 2048 10 20 30 2
 "#;
         let cursor = Cursor::new(mountstats_data);

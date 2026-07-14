@@ -1,0 +1,31 @@
+device rootfs mounted on / with fstype rootfs
+device proc mounted on /proc with fstype proc
+device sysfs mounted on /sys with fstype sysfs
+device /dev/sda1 mounted on /boot with fstype ext4
+device serverA:/exportA mounted on /mnt/a with fstype nfs statvers=1.1
+	opts:	rw,vers=3,rsize=1048576,wsize=1048576,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys
+	age:	1000
+	caps:	caps=0xf,wtmult=4096,dtsize=131072,bsize=0,namlen=255
+	sec:	flavor=1,pseudoflavor=1
+	events:	100 200 0 0 5 22 51 0 0 5 0 10 0 0 3 3 0 3 0 0 5 0 0 0 0 0 0
+	bytes:	0 0 100 200 300 400 0 0
+	RPC iostats version: 1.1  p/v: 100003/3 (nfs)
+	xprt:	tcp 900 1 8 0 0 1000 1000 0 1010 5 4 30 500
+	per-op statistics
+	        READ: 100 100 0 13200 3276800 10 150 170 0
+	     GETATTR: 500 500 0 56000 60000 5 250 300 0
+device tmpfs mounted on /run with fstype tmpfs
+device serverB:/exportB mounted on /mnt/b with fstype nfs4 statvers=1.1
+	opts:	rw,vers=4.2,rsize=1048576,wsize=1048576,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys
+	age:	2000
+	impl_id:	name='Example Filer OS 3.2',domain='example.com',date='1700000000,0'
+	caps:	caps=0x3fff7,wtmult=512,dtsize=32768,bsize=0,namlen=255
+	nfsv4:	bm0=0xfdffbfff,bm1=0x40f9be3e,bm2=0x803,acl=0x3,sessions,pnfs=not configured
+	sec:	flavor=1,pseudoflavor=1
+	events:	50 100 0 0 2 11 25 0 0 2 0 5 0 0 1 1 0 1 0 0 2 0 0 0 0 0 0
+	bytes:	0 0 500 600 700 800 0 0
+	RPC iostats version: 1.1  p/v: 100003/4 (nfs)
+	xprt:	tcp 901 1 8 0 0 2000 2000 0 2020 0 6 60 900
+	per-op statistics
+	       WRITE: 300 300 0 9830400 42000 30 900 1000 0
+	      ACCESS: 50 50 0 5600 6000 1 20 25 0
