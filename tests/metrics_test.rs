@@ -3,7 +3,6 @@ use nfs_gaze::{
     types::{DeltaStats, NFSEvents, NFSMount, NFSOperation},
 };
 use std::collections::HashMap;
-use std::time::Duration;
 
 fn create_test_mount(device: &str, mount_point: &str) -> NFSMount {
     let mut operations = HashMap::new();
@@ -183,14 +182,12 @@ fn test_metrics_config_custom_values() {
         enable_prometheus: true,
         prometheus_port: 8080,
         prometheus_bind: "0.0.0.0".to_string(),
-        export_interval: Duration::from_secs(30),
         include_labels: false,
     };
 
     assert!(config.enable_prometheus);
     assert_eq!(config.prometheus_port, 8080);
     assert_eq!(config.prometheus_bind, "0.0.0.0");
-    assert_eq!(config.export_interval, Duration::from_secs(30));
     assert!(!config.include_labels);
 }
 

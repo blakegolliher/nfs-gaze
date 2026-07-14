@@ -61,7 +61,6 @@ These flags are only present when the binary was built with the
 | `--prometheus`        | `false`     | Enable the Prometheus HTTP exporter        |
 | `--prometheus-bind`   | `127.0.0.1` | Address the HTTP server binds to           |
 | `--prometheus-port`   | `9100`      | Port the HTTP server listens on            |
-| `--metrics-interval`  | `10`        | Metrics export interval in seconds         |
 
 ## Metrics Reference
 

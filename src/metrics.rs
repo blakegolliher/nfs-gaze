@@ -1,6 +1,5 @@
 use crate::stats::MountDeltas;
 use crate::types::{DeltaStats, DeltaXprtStats, NFSEvents, NFSMount};
-use std::time::Duration;
 
 #[cfg(feature = "prometheus")]
 use prometheus::{CounterVec, Encoder, GaugeVec, Opts, Registry, TextEncoder};
@@ -50,7 +49,6 @@ pub struct MetricsConfig {
     pub enable_prometheus: bool,
     pub prometheus_port: u16,
     pub prometheus_bind: String,
-    pub export_interval: Duration,
     pub include_labels: bool,
 }
 
@@ -60,7 +58,6 @@ impl Default for MetricsConfig {
             enable_prometheus: false,
             prometheus_port: 9100,
             prometheus_bind: "127.0.0.1".to_string(),
-            export_interval: Duration::from_secs(10),
             include_labels: true,
         }
     }
@@ -906,7 +903,6 @@ mod tests {
         assert!(!config.enable_prometheus);
         assert_eq!(config.prometheus_port, 9100);
         assert_eq!(config.prometheus_bind, "127.0.0.1");
-        assert_eq!(config.export_interval, Duration::from_secs(10));
     }
 
     #[test]

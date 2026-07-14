@@ -90,10 +90,6 @@ pub struct Args {
     #[arg(long, default_value = "9100")]
     pub prometheus_port: u16,
 
-    /// Metrics export interval in seconds
-    #[arg(long, default_value = "10")]
-    pub metrics_interval: u64,
-
     /// Optional subcommand. When present, the top-level run-mode
     /// flags above are ignored.
     #[command(subcommand)]
@@ -139,7 +135,6 @@ impl Args {
             #[cfg(not(feature = "prometheus"))]
             prometheus_port: 9100,
 
-            export_interval: std::time::Duration::from_secs(self.metrics_interval),
             include_labels: true,
         }
     }

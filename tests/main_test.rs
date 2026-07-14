@@ -112,7 +112,6 @@ mod linux_tests {
             prometheus: true,
             prometheus_bind: "127.0.0.1".to_string(),
             prometheus_port: 8080,
-            metrics_interval: 10,
         };
 
         let config = args.to_metrics_config();
@@ -135,7 +134,6 @@ mod linux_tests {
             mountstats_path: "/proc/self/mountstats".to_string(),
             show_bandwidth: false,
             clear_screen: false,
-            metrics_interval: 10,
         };
 
         let config = args.to_metrics_config();

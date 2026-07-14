@@ -15,7 +15,6 @@ fn main() {
         enable_prometheus: true,
         prometheus_port: 9100,
         prometheus_bind: "127.0.0.1".to_string(),
-        export_interval: std::time::Duration::from_secs(10),
         include_labels: true,
     };
 

@@ -65,7 +65,6 @@ restrict access at the network layer.
 | `--prometheus`        | `false`     | Enable the Prometheus HTTP exporter  |
 | `--prometheus-bind`   | `127.0.0.1` | Address the HTTP server binds to     |
 | `--prometheus-port`   | `9100`      | Port the HTTP server listens on      |
-| `--metrics-interval`  | `10`        | Metrics export interval in seconds   |
 
 ### HTTP endpoints
 
@@ -168,9 +167,9 @@ The DaemonSet uses `hostNetwork` so each pod sees the host's
   rebases against the post-reset values on the next tick. Published
   Prometheus counters then resume on the next non-zero delta and
   `rate()` queries recover automatically.
-- A `--metrics-interval` of 10s pairs well with a Prometheus
-  `scrape_interval` of 15s. Intervals shorter than ~5s rarely produce
-  meaningfully different rates.
+- Metrics are updated once per sampling interval (`-i`, default 1s),
+  so any Prometheus `scrape_interval` of a few seconds or more sees
+  fresh values on every scrape.
 
 ## Troubleshooting
 

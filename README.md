@@ -202,7 +202,6 @@ compatible with `nfs-gaze compare`.
 | | `--bw` | false | Show bandwidth statistics |
 | | `--clear` | false | Clear screen between iterations |
 | `-f` | `--mountstats-path` | /proc/self/mountstats | Path to mountstats file |
-| | `--metrics-interval` | 10 | Metrics export interval in seconds |
 
 ### Subcommands
 
