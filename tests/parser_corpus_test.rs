@@ -53,6 +53,13 @@ fn corpus_nfs3_nconnect16_parses_fully() {
     assert_eq!(read.ops, 175253);
     assert_eq!(read.bytes_recv, 183788522112);
 
+    // The workload is O_DIRECT: normalread/normalwrite are 0 in the
+    // fixture while serverread/serverwrite carry ~183 GB / ~152 GB.
+    // Mount-level bytes must be the wire-level (server) pair or this
+    // entire workload would report zero bytes read.
+    assert_eq!(mount.bytes_read, 183766089728);
+    assert_eq!(mount.bytes_write, 152135794688);
+
     // The v3 per-op table has 22 operations (NULL through COMMIT).
     assert_eq!(mount.operations.len(), 22);
 
@@ -133,6 +140,8 @@ fn corpus_multi_mount_finds_only_nfs_mounts() {
     assert_eq!(a.operations.len(), 2);
     assert_eq!(a.operations["GETATTR"].ops, 500);
     assert!(!a.operations.contains_key("WRITE"));
+    assert_eq!(a.bytes_read, 300, "serverread field (index 5)");
+    assert_eq!(a.bytes_write, 400, "serverwrite field (index 6)");
 
     let b = &mounts["/mnt/b"];
     assert_eq!(b.age, 2000);

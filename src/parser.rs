@@ -326,14 +326,22 @@ impl MountstatsParser {
     fn parse_bytes(&mut self, line: &str) {
         // Kernel format: "bytes: normalread normalwrite directread directwrite serverread serverwrite pagesread pageswrite"
         // Index:              1          2           3            4          5           6          7          8
-        // bytes_read = index 1 (normalread), bytes_write = index 6 (serverwrite)
+        //
+        // We report the *server* pair (indexes 5 and 6): bytes that
+        // actually crossed the wire via READ/WRITE RPCs. The normal*
+        // pair counts application read()/write() traffic, which both
+        // includes page-cache hits that never touched the network and
+        // excludes O_DIRECT I/O entirely — an O_DIRECT-heavy workload
+        // (databases, hypervisors) shows normalread=0 while moving
+        // hundreds of gigabytes. Wire-level is the symmetric,
+        // cache-independent truth for a network monitor.
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < MIN_BYTES_FIELDS {
             warn_once("bytes", &format!("skipping malformed bytes line: {}", line));
             return;
         }
 
-        let read = parts[1].parse::<i64>();
+        let read = parts[5].parse::<i64>();
         // A short line missing the write field is tolerated as zero;
         // a present-but-unparseable field is not silently zeroed.
         let write = parts.get(6).map(|v| v.parse::<i64>()).transpose();
@@ -560,7 +568,7 @@ mod tests {
         let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
 age: 12345
 events: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
-bytes: 1048576 0 0 0 0 2097152 0 0
+bytes: 111 222 333 444 1048576 2097152 777 888
 per-op statistics
 READ: 100 95 5 1024 2048 10 20 30 2
 WRITE: 50 50 0 512 0 5 15 25 1
@@ -620,13 +628,30 @@ WRITE: 20 20 0 300 400 2 3 4 0
         // bytes line with only 6 fields (no index 6) — bytes_write should default to 0
         let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
 age: 100
-bytes: 1048576 0 0 0 0
+bytes: 11 22 33 44 1048576
 "#;
         let cursor = Cursor::new(mountstats_data);
         let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
         let mount = &mounts["/mnt/nfs"];
         assert_eq!(mount.bytes_read, 1048576);
         assert_eq!(mount.bytes_write, 0);
+    }
+
+    #[test]
+    fn test_parse_bytes_uses_wire_level_server_fields() {
+        // Regression pin for the O_DIRECT blind spot: a direct-I/O
+        // workload has normalread/normalwrite = 0 while the server*
+        // fields carry the real transfer volume. bytes_read/bytes_write
+        // must come from the server (wire-level) pair, indexes 5 and 6.
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1
+age: 100
+bytes: 0 0 183766089728 152135794688 183766089728 152135794688 0 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        let mount = &mounts["/mnt/nfs"];
+        assert_eq!(mount.bytes_read, 183766089728);
+        assert_eq!(mount.bytes_write, 152135794688);
     }
 
     #[test]

@@ -181,7 +181,14 @@ pub struct NFSMount {
     pub age: i64,
     pub operations: HashMap<String, NFSOperation>,
     pub events: Option<NFSEvents>,
+    /// Cumulative bytes read from the server over the wire
+    /// (`serverreadbytes` from the kernel's `bytes:` line). Wire-level
+    /// rather than application-level: page-cache hits are excluded and
+    /// O_DIRECT reads are included.
     pub bytes_read: i64,
+    /// Cumulative bytes written to the server over the wire
+    /// (`serverwritebytes`). Same wire-level semantics as
+    /// [`Self::bytes_read`].
     pub bytes_write: i64,
     /// RPC transport statistics, when the parser recognised the
     /// `xprt:` line layout. `None` for unrecognised protocols (UDP,
