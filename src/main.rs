@@ -121,6 +121,7 @@ async fn run_monitor(args: nfs_gaze::cli::Args) -> anyhow::Result<()> {
             MonitorConfig {
                 mountstats_path: &args.mountstats_path,
                 monitor_mounts,
+                mount_point: args.mount_point.clone(),
                 operations_filter,
                 interval,
                 count: args.count,

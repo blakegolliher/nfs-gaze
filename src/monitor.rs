@@ -43,6 +43,12 @@ pub fn read_tcp_slot_cap() -> Option<i64> {
 pub struct MonitorConfig<'a> {
     pub mountstats_path: &'a str,
     pub monitor_mounts: Vec<NFSMount>,
+    /// The `-m` mount-point filter. When `Some`, only this mount is
+    /// displayed/aggregated/exported each interval; when `None`, all
+    /// NFS mounts are monitored (including ones that appear mid-run).
+    /// An interval where the selected mount is absent (unmounted) is
+    /// quietly skipped rather than treated as an error.
+    pub mount_point: Option<String>,
     pub operations_filter: HashSet<String>,
     pub interval: Duration,
     /// Maximum iteration count (0 = unlimited). Mutually exclusive with
@@ -145,6 +151,7 @@ impl Monitor {
         let MonitorConfig {
             mountstats_path,
             monitor_mounts,
+            mount_point,
             operations_filter,
             interval,
             count,
@@ -237,14 +244,18 @@ impl Monitor {
                 }
             };
 
-            // Get current monitored mounts
-            let current_monitor_mounts = match Self::get_mounts_to_monitor(None, &current_mounts) {
-                Ok(mounts) => mounts,
-                Err(e) => {
-                    eprintln!("Error getting mounts to monitor: {}", e);
-                    continue;
-                }
+            // Select this interval's mounts, honouring the -m filter.
+            // A selected mount that is currently absent (unmounted)
+            // yields an empty set for the interval — no error spam;
+            // when it returns, the reset detection rebases cleanly.
+            let mut current_monitor_mounts: Vec<NFSMount> = match &mount_point {
+                Some(target) => current_mounts.get(target).cloned().into_iter().collect(),
+                None => current_mounts.values().cloned().collect(),
             };
+            // Sort for a stable display order across intervals —
+            // HashMap iteration order would otherwise shuffle the
+            // mounts on every refresh.
+            current_monitor_mounts.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
 
             // Calculate elapsed time
             let now = Instant::now();
@@ -499,6 +510,7 @@ mod tests {
             MonitorConfig {
                 mountstats_path: "/definitely/not/a/real/path/mountstats",
                 monitor_mounts: vec![],
+                mount_point: None,
                 operations_filter: HashSet::new(),
                 interval: Duration::from_millis(1),
                 // count=0 means "infinite iterations"; we rely on the
@@ -550,6 +562,7 @@ mod tests {
             MonitorConfig {
                 mountstats_path: &path,
                 monitor_mounts: vec![],
+                mount_point: None,
                 operations_filter: HashSet::new(),
                 interval: Duration::from_millis(20),
                 count: 0,
@@ -596,6 +609,7 @@ mod tests {
             MonitorConfig {
                 mountstats_path: mountstats_path.to_str().expect("utf-8 path"),
                 monitor_mounts: vec![],
+                mount_point: None,
                 operations_filter: HashSet::new(),
                 interval: Duration::from_millis(10),
                 count: 0,
@@ -626,6 +640,143 @@ mod tests {
             "no monitor_mounts passed → no MountReports expected, got {:?}",
             report.mounts
         );
+    }
+
+    /// Write a two-mount mountstats file whose counters scale with
+    /// `k`, atomically (write + rename) so a concurrently running
+    /// monitoring loop never reads a torn file.
+    fn write_two_mount_stats(path: &std::path::Path, k: i64) {
+        let content = format!(
+            r#"device serverA:/exportA mounted on /mnt/a with fstype nfs statvers=1.1
+	age:	{age_a}
+	bytes:	0 0 0 0 {rd_a} {wr_a} 0 0
+	xprt:	tcp 900 1 8 0 0 {x_a} {x_a} 0 {x_a} 0 4 {snd_a} {pnd_a}
+	per-op statistics
+	        READ: {ops_a} {ops_a} 0 {sent_a} {recv_a} {q_a} {rtt_a} {exe_a} 0
+device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
+	age:	{age_b}
+	bytes:	0 0 0 0 {rd_b} {wr_b} 0 0
+	xprt:	tcp 901 1 8 0 0 {x_b} {x_b} 0 {x_b} 0 8 {snd_b} {pnd_b}
+	per-op statistics
+	       WRITE: {ops_b} {ops_b} 0 {sent_b} {recv_b} {q_b} {rtt_b} {exe_b} 0
+"#,
+            age_a = 1000 + k,
+            rd_a = k * 1_048_576,
+            wr_a = k * 524_288,
+            x_a = k * 100,
+            snd_a = k * 30,
+            pnd_a = k * 500,
+            ops_a = k * 100,
+            sent_a = k * 13_200,
+            recv_a = k * 3_276_800,
+            q_a = k * 10,
+            rtt_a = k * 150,
+            exe_a = k * 170,
+            age_b = 2000 + k,
+            rd_b = k * 2_097_152,
+            wr_b = k * 1_048_576,
+            x_b = k * 200,
+            snd_b = k * 60,
+            pnd_b = k * 900,
+            ops_b = k * 300,
+            sent_b = k * 9_830_400,
+            recv_b = k * 42_000,
+            q_b = k * 30,
+            rtt_b = k * 900,
+            exe_b = k * 1_000,
+        );
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, content).expect("write temp mountstats");
+        std::fs::rename(&tmp, path).expect("rename mountstats into place");
+    }
+
+    /// Run the monitoring loop against a live-updated two-mount file
+    /// and return everything it wrote to the display writer.
+    fn run_loop_against_bumped_file(mount_point: Option<String>) -> String {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("create tempdir");
+        let path = dir.path().join("mountstats");
+        write_two_mount_stats(&path, 1);
+
+        let bump_path = path.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let bump_stop = stop.clone();
+        let bumper = thread::spawn(move || {
+            let mut k = 2;
+            while !bump_stop.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(100));
+                write_two_mount_stats(&bump_path, k);
+                k += 1;
+            }
+        });
+
+        let monitor = Monitor::new();
+        let mut output = Vec::<u8>::new();
+        let result = monitor.monitoring_loop(
+            &mut output,
+            MonitorConfig {
+                mountstats_path: path.to_str().expect("utf-8 path"),
+                monitor_mounts: vec![],
+                mount_point,
+                operations_filter: HashSet::new(),
+                interval: Duration::from_millis(200),
+                count: 0,
+                duration: Some(Duration::from_millis(1300)),
+                output: None,
+                slot_cap: Some(128),
+                show_bandwidth: false,
+                clear_screen: false,
+                metrics_manager: None,
+            },
+        );
+        stop.store(true, Ordering::SeqCst);
+        bumper.join().expect("bumper thread");
+        result.expect("loop should exit cleanly on duration");
+
+        String::from_utf8(output).expect("display output is utf-8")
+    }
+
+    #[test]
+    fn test_monitoring_loop_honors_mount_filter() {
+        // Both mounts are active every interval; with -m /mnt/a only
+        // /mnt/a may appear in the display output. The pre-fix loop
+        // re-listed all mounts each interval and leaked /mnt/b from
+        // the second interval onward.
+        let output = run_loop_against_bumped_file(Some("/mnt/a".to_string()));
+
+        assert!(
+            output.contains("/mnt/a"),
+            "the selected mount must be displayed (harness produced no activity?): {output}"
+        );
+        assert!(
+            !output.contains("/mnt/b"),
+            "-m /mnt/a must not display other mounts: {output}"
+        );
+    }
+
+    #[test]
+    fn test_monitoring_loop_displays_all_mounts_in_stable_order() {
+        // Without -m, both active mounts appear — and in sorted order
+        // within every interval, not HashMap order.
+        let output = run_loop_against_bumped_file(None);
+
+        let headers: Vec<&str> = output
+            .lines()
+            .filter(|l| l.contains(" mounted on "))
+            .collect();
+        assert!(
+            headers.len() >= 2,
+            "expected at least one interval showing both mounts: {output}"
+        );
+        for pair in headers.chunks(2) {
+            if let [first, second] = pair {
+                assert!(
+                    first.ends_with("/mnt/a") && second.ends_with("/mnt/b"),
+                    "mounts must render in sorted order every interval, got {first} then {second}"
+                );
+            }
+        }
     }
 
     #[test]
