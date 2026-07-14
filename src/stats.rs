@@ -15,11 +15,22 @@ fn safe_div(numerator: f64, denominator: f64) -> f64 {
 /// a remount or `umount`/`mount` cycle that re-initialised
 /// `/proc/self/mountstats`) and dropped from this batch. The next
 /// sample will compute a fresh delta against the post-reset values.
+///
+/// A mount `age` that moved backwards is the authoritative remount
+/// signal and invalidates the *whole* sample: the per-op monotonic
+/// checks cannot catch a remount whose fresh counters happen to
+/// exceed the previous sample's (e.g. a long capture whose previous
+/// sample was taken shortly after an earlier remount), which would
+/// otherwise fabricate a delta spanning two different mounts.
 pub fn calculate_delta_stats(
     previous: &NFSMount,
     current: &NFSMount,
     elapsed_seconds: f64,
 ) -> Vec<DeltaStats> {
+    if current.age < previous.age {
+        return Vec::new();
+    }
+
     let mut deltas = Vec::new();
 
     for (op_name, current_op) in &current.operations {
@@ -231,11 +242,16 @@ pub struct MountDeltas {
 
 /// Compute the mount-level deltas between two samples.
 ///
-/// Returns `None` when any counter moved backwards (kernel reset the
-/// per-mount stats on remount), matching the all-or-nothing reset
-/// semantics of [`calculate_delta_stats`]: a reset invalidates the
-/// whole sample, not individual fields.
+/// Returns `None` when the mount age moved backwards (remount — see
+/// [`calculate_delta_stats`]) or when any counter moved backwards
+/// (kernel reset the per-mount stats), matching the all-or-nothing
+/// reset semantics of the per-operation path: a reset invalidates
+/// the whole sample, not individual fields.
 pub fn calculate_mount_deltas(previous: &NFSMount, current: &NFSMount) -> Option<MountDeltas> {
+    if current.age < previous.age {
+        return None;
+    }
+
     if current.bytes_read < previous.bytes_read || current.bytes_write < previous.bytes_write {
         return None;
     }
@@ -336,6 +352,46 @@ mod tests {
             "expected counter-reset sample to be dropped, got {:?}",
             deltas
         );
+    }
+
+    #[test]
+    fn test_age_reset_drops_sample_even_when_counters_grew() {
+        // The dangerous remount: the fresh mount's counters happen to
+        // exceed the previous sample's, so per-op monotonic checks
+        // see nothing wrong — but the delta would span two different
+        // mounts. The age going backwards must invalidate the whole
+        // sample.
+        let mut prev_ops = HashMap::new();
+        prev_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 100, 1_024, 2_048, 50, 80),
+        );
+        let mut prev = create_test_mount_with_operations(prev_ops);
+        prev.age = 500_000;
+
+        let mut curr_ops = HashMap::new();
+        curr_ops.insert(
+            "READ".to_string(),
+            create_test_operation_with_stats("READ", 100_000, 10_485_760, 20_971_520, 5_000, 8_000),
+        );
+        let mut curr = create_test_mount_with_operations(curr_ops);
+        curr.age = 10;
+
+        let deltas = calculate_delta_stats(&prev, &curr, 1.0);
+        assert!(
+            deltas.is_empty(),
+            "an age reset must drop every op delta, got {:?}",
+            deltas
+        );
+    }
+
+    #[test]
+    fn test_mount_deltas_none_on_age_reset_even_when_bytes_grew() {
+        let mut prev = mount_with_bytes_and_events(1_000, 2_000, 100);
+        prev.age = 500_000;
+        let mut curr = mount_with_bytes_and_events(1_000_000, 2_000_000, 999);
+        curr.age = 10;
+        assert!(calculate_mount_deltas(&prev, &curr).is_none());
     }
 
     #[test]

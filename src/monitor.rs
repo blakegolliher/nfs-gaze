@@ -284,6 +284,19 @@ impl Monitor {
             // Process each monitored mount
             for current_mount in &current_monitor_mounts {
                 if let Some(previous_mount) = previous_mounts.get(&current_mount.mount_point) {
+                    // Age moving backwards means the mount was
+                    // re-created since the previous sample: every
+                    // kernel counter — ops, bytes, events, and the
+                    // xprt transports (which carry no age of their
+                    // own) — rebased. Skip the whole interval for
+                    // this mount and rebase against the fresh
+                    // counters for the next one.
+                    if current_mount.age < previous_mount.age {
+                        previous_mounts
+                            .insert(current_mount.mount_point.clone(), current_mount.clone());
+                        continue;
+                    }
+
                     // Calculate delta statistics
                     let mut delta_stats =
                         calculate_delta_stats(previous_mount, current_mount, elapsed_seconds);
@@ -735,6 +748,102 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
         result.expect("loop should exit cleanly on duration");
 
         String::from_utf8(output).expect("display output is utf-8")
+    }
+
+    /// Single-mount mountstats writer for remount simulations: `age`
+    /// and the READ op counters are fully caller-controlled.
+    fn write_single_mount_stats(path: &std::path::Path, age: i64, ops: i64) {
+        let content = format!(
+            r#"device serverA:/exportA mounted on /mnt/a with fstype nfs statvers=1.1
+	age:	{age}
+	per-op statistics
+	        READ: {ops} {ops} 0 {sent} {recv} {queue} {rtt} {exe} 0
+"#,
+            age = age,
+            ops = ops,
+            sent = ops * 132,
+            recv = ops * 32_768,
+            queue = ops / 10,
+            rtt = ops,
+            exe = ops * 2,
+        );
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, content).expect("write temp mountstats");
+        std::fs::rename(&tmp, path).expect("rename mountstats into place");
+    }
+
+    #[test]
+    fn test_monitoring_loop_drops_interval_spanning_a_remount() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("create tempdir");
+        let path = dir.path().join("mountstats");
+        write_single_mount_stats(&path, 1001, 100);
+
+        // Normal activity, then a remount whose fresh counters are far
+        // LARGER than the previous sample's — the case the per-op
+        // monotonic checks cannot catch — then normal activity again.
+        // Without the age check, the remount-spanning interval would
+        // fabricate a delta of ~50k ops and display a monster IOPS
+        // spike.
+        let schedule: Vec<(i64, i64)> = vec![
+            (1002, 200),
+            (1003, 300),
+            (1004, 400),
+            (2, 50_000),
+            (3, 50_100),
+            (4, 50_200),
+            (5, 50_300),
+            (6, 50_400),
+            (7, 50_500),
+        ];
+        let bump_path = path.clone();
+        let bumper = thread::spawn(move || {
+            for (age, ops) in schedule {
+                thread::sleep(Duration::from_millis(100));
+                write_single_mount_stats(&bump_path, age, ops);
+            }
+        });
+
+        let monitor = Monitor::new();
+        let mut output = Vec::<u8>::new();
+        monitor
+            .monitoring_loop(
+                &mut output,
+                MonitorConfig {
+                    mountstats_path: path.to_str().expect("utf-8 path"),
+                    monitor_mounts: vec![],
+                    mount_point: Some("/mnt/a".to_string()),
+                    operations_filter: HashSet::new(),
+                    interval: Duration::from_millis(200),
+                    count: 0,
+                    duration: Some(Duration::from_millis(1300)),
+                    output: None,
+                    slot_cap: None,
+                    show_bandwidth: false,
+                    clear_screen: false,
+                    metrics_manager: None,
+                },
+            )
+            .expect("loop should exit cleanly on duration");
+        bumper.join().expect("bumper thread");
+
+        let output = String::from_utf8(output).expect("utf-8");
+        for line in output
+            .lines()
+            .filter(|l| l.trim_start().starts_with("READ"))
+        {
+            let iops: f64 = line
+                .split_whitespace()
+                .nth(1)
+                .expect("IOPS column present")
+                .parse()
+                .expect("IOPS parses as a number");
+            assert!(
+                iops < 10_000.0,
+                "a remount-spanning interval leaked a bogus spike: {line}\nfull output:\n{output}"
+            );
+        }
     }
 
     #[test]
