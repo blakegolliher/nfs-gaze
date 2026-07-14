@@ -1,4 +1,4 @@
-use crate::types::{DeltaStats, DeltaXprtStats, NFSMount, NFSOperation, XprtStats};
+use crate::types::{DeltaStats, DeltaXprtStats, NFSEvents, NFSMount, NFSOperation, XprtStats};
 
 fn safe_div(numerator: f64, denominator: f64) -> f64 {
     if denominator > 0.0 {
@@ -208,6 +208,52 @@ pub fn calculate_xprt_delta(
         bklog_per_req,
         sending_per_req,
         pending_per_req,
+    })
+}
+
+/// Per-interval delta of the mount-level cumulative counters: the
+/// wire-level byte totals from the `bytes:` line and the VFS event
+/// counters from the `events:` line.
+///
+/// These exist for consumers that need *rates* (Prometheus counters,
+/// bandwidth displays). Feeding the raw cumulative values to a
+/// counter once per interval — the original bug — inflates it
+/// quadratically: after N intervals the counter holds roughly
+/// N x cumulative instead of the true total.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountDeltas {
+    pub delta_bytes_read: i64,
+    pub delta_bytes_write: i64,
+    /// Per-interval VFS event deltas, present only when both samples
+    /// carried an `events:` line.
+    pub delta_events: Option<NFSEvents>,
+}
+
+/// Compute the mount-level deltas between two samples.
+///
+/// Returns `None` when any counter moved backwards (kernel reset the
+/// per-mount stats on remount), matching the all-or-nothing reset
+/// semantics of [`calculate_delta_stats`]: a reset invalidates the
+/// whole sample, not individual fields.
+pub fn calculate_mount_deltas(previous: &NFSMount, current: &NFSMount) -> Option<MountDeltas> {
+    if current.bytes_read < previous.bytes_read || current.bytes_write < previous.bytes_write {
+        return None;
+    }
+
+    let delta_events = match (&previous.events, &current.events) {
+        (Some(prev), Some(cur)) => match NFSEvents::delta(cur, prev) {
+            Some(delta) => Some(delta),
+            // Events went backwards while bytes did not: still a
+            // reset — drop the whole sample.
+            None => return None,
+        },
+        _ => None,
+    };
+
+    Some(MountDeltas {
+        delta_bytes_read: current.bytes_read - previous.bytes_read,
+        delta_bytes_write: current.bytes_write - previous.bytes_write,
+        delta_events,
     })
 }
 
@@ -446,6 +492,141 @@ mod tests {
         assert_eq!(delta.iops, 0.0);
         assert_eq!(delta.kb_per_sec, 0.0);
         assert!(delta.avg_rtt > 0.0);
+    }
+
+    // --- calculate_mount_deltas tests ---
+
+    fn mount_with_bytes_and_events(read: i64, write: i64, event_base: i64) -> NFSMount {
+        let mut mount = create_test_mount_with_operations(HashMap::new());
+        mount.bytes_read = read;
+        mount.bytes_write = write;
+        // Distinct value per field (base, base+1, ...) so index mixups
+        // between fields are caught, not masked.
+        mount.events = Some(NFSEvents {
+            inode_revalidate: event_base,
+            dentry_revalidate: event_base + 1,
+            vfs_open: event_base + 4,
+            vfs_fsync: event_base + 15,
+            pnfs_write: event_base + 26,
+            ..NFSEvents::default()
+        });
+        mount
+    }
+
+    #[test]
+    fn test_mount_deltas_are_differences_not_cumulative() {
+        let prev = mount_with_bytes_and_events(1_000, 2_000, 100);
+        let curr = mount_with_bytes_and_events(1_500, 2_600, 130);
+
+        let deltas = calculate_mount_deltas(&prev, &curr).expect("monotonic sample");
+        assert_eq!(deltas.delta_bytes_read, 500);
+        assert_eq!(deltas.delta_bytes_write, 600);
+
+        let events = deltas.delta_events.expect("both samples had events");
+        assert_eq!(events.inode_revalidate, 30);
+        assert_eq!(events.dentry_revalidate, 30);
+        assert_eq!(events.vfs_open, 30);
+        assert_eq!(events.vfs_fsync, 30);
+        assert_eq!(events.pnfs_write, 30);
+    }
+
+    #[test]
+    fn test_mount_deltas_conservation_across_intervals() {
+        // Nothing dropped, nothing double counted: the sum of interval
+        // deltas over a monotonic counter walk must equal final minus
+        // initial.
+        let walk = [
+            (0i64, 0i64),
+            (100, 50),
+            (100, 700),
+            (250, 700),
+            (900, 1_000),
+        ];
+        let mounts: Vec<NFSMount> = walk
+            .iter()
+            .map(|&(r, w)| mount_with_bytes_and_events(r, w, r))
+            .collect();
+
+        let mut sum_read = 0;
+        let mut sum_write = 0;
+        for pair in mounts.windows(2) {
+            let d = calculate_mount_deltas(&pair[0], &pair[1]).expect("monotonic walk");
+            sum_read += d.delta_bytes_read;
+            sum_write += d.delta_bytes_write;
+        }
+        assert_eq!(sum_read, 900, "sum of deltas == final - initial");
+        assert_eq!(sum_write, 1_000);
+    }
+
+    #[test]
+    fn test_mount_deltas_none_on_bytes_reset() {
+        let prev = mount_with_bytes_and_events(1_000, 2_000, 100);
+        let curr = mount_with_bytes_and_events(10, 2_600, 130);
+        assert!(calculate_mount_deltas(&prev, &curr).is_none());
+    }
+
+    #[test]
+    fn test_mount_deltas_none_on_events_reset_even_if_bytes_grew() {
+        let prev = mount_with_bytes_and_events(1_000, 2_000, 100);
+        let curr = mount_with_bytes_and_events(1_500, 2_600, 5);
+        assert!(
+            calculate_mount_deltas(&prev, &curr).is_none(),
+            "a reset invalidates the whole sample, not just the events"
+        );
+    }
+
+    #[test]
+    fn test_mount_deltas_without_events_still_deltas_bytes() {
+        let mut prev = mount_with_bytes_and_events(1_000, 2_000, 100);
+        prev.events = None;
+        let curr = mount_with_bytes_and_events(1_500, 2_600, 130);
+
+        let deltas = calculate_mount_deltas(&prev, &curr).expect("bytes are monotonic");
+        assert_eq!(deltas.delta_bytes_read, 500);
+        assert!(
+            deltas.delta_events.is_none(),
+            "events delta needs both samples"
+        );
+    }
+
+    #[test]
+    fn test_events_delta_roundtrip_covers_every_field() {
+        // Feed a strictly increasing value into every one of the 27
+        // fields and check the delta reproduces each field exactly —
+        // guards the to_array/from_array mapping against transposition.
+        let prev_parts: Vec<String> = (0..27).map(|i| (i * 10).to_string()).collect();
+        let curr_parts: Vec<String> = (0..27).map(|i| (i * 10 + i + 1).to_string()).collect();
+        let prev = crate::parser::parse_events(&prev_parts).unwrap();
+        let curr = crate::parser::parse_events(&curr_parts).unwrap();
+
+        let delta = NFSEvents::delta(&curr, &prev).expect("monotonic events");
+        assert_eq!(delta.inode_revalidate, 1);
+        assert_eq!(delta.dentry_revalidate, 2);
+        assert_eq!(delta.data_invalidate, 3);
+        assert_eq!(delta.attr_invalidate, 4);
+        assert_eq!(delta.vfs_open, 5);
+        assert_eq!(delta.vfs_lookup, 6);
+        assert_eq!(delta.vfs_access, 7);
+        assert_eq!(delta.vfs_update_page, 8);
+        assert_eq!(delta.vfs_read_page, 9);
+        assert_eq!(delta.vfs_read_pages, 10);
+        assert_eq!(delta.vfs_write_page, 11);
+        assert_eq!(delta.vfs_write_pages, 12);
+        assert_eq!(delta.vfs_getdents, 13);
+        assert_eq!(delta.vfs_setattr, 14);
+        assert_eq!(delta.vfs_flush, 15);
+        assert_eq!(delta.vfs_fsync, 16);
+        assert_eq!(delta.vfs_lock, 17);
+        assert_eq!(delta.vfs_release, 18);
+        assert_eq!(delta.congestion_wait, 19);
+        assert_eq!(delta.setattr_trunc, 20);
+        assert_eq!(delta.extend_write, 21);
+        assert_eq!(delta.silly_rename, 22);
+        assert_eq!(delta.short_read, 23);
+        assert_eq!(delta.short_write, 24);
+        assert_eq!(delta.delay, 25);
+        assert_eq!(delta.pnfs_read, 26);
+        assert_eq!(delta.pnfs_write, 27);
     }
 
     // --- calculate_xprt_delta tests ---

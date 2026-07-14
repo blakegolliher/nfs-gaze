@@ -82,6 +82,97 @@ pub struct NFSEvents {
     pub pnfs_write: i64,        // index 26
 }
 
+/// Number of event counters in [`NFSEvents`], including the optional
+/// trailing pNFS pair.
+pub const NFS_EVENTS_COUNT: usize = 27;
+
+impl NFSEvents {
+    /// The counters in kernel index order (the order of the fields on
+    /// the `events:` line, documented on each struct field).
+    fn to_array(&self) -> [i64; NFS_EVENTS_COUNT] {
+        [
+            self.inode_revalidate,
+            self.dentry_revalidate,
+            self.data_invalidate,
+            self.attr_invalidate,
+            self.vfs_open,
+            self.vfs_lookup,
+            self.vfs_access,
+            self.vfs_update_page,
+            self.vfs_read_page,
+            self.vfs_read_pages,
+            self.vfs_write_page,
+            self.vfs_write_pages,
+            self.vfs_getdents,
+            self.vfs_setattr,
+            self.vfs_flush,
+            self.vfs_fsync,
+            self.vfs_lock,
+            self.vfs_release,
+            self.congestion_wait,
+            self.setattr_trunc,
+            self.extend_write,
+            self.silly_rename,
+            self.short_read,
+            self.short_write,
+            self.delay,
+            self.pnfs_read,
+            self.pnfs_write,
+        ]
+    }
+
+    fn from_array(values: [i64; NFS_EVENTS_COUNT]) -> Self {
+        Self {
+            inode_revalidate: values[0],
+            dentry_revalidate: values[1],
+            data_invalidate: values[2],
+            attr_invalidate: values[3],
+            vfs_open: values[4],
+            vfs_lookup: values[5],
+            vfs_access: values[6],
+            vfs_update_page: values[7],
+            vfs_read_page: values[8],
+            vfs_read_pages: values[9],
+            vfs_write_page: values[10],
+            vfs_write_pages: values[11],
+            vfs_getdents: values[12],
+            vfs_setattr: values[13],
+            vfs_flush: values[14],
+            vfs_fsync: values[15],
+            vfs_lock: values[16],
+            vfs_release: values[17],
+            congestion_wait: values[18],
+            setattr_trunc: values[19],
+            extend_write: values[20],
+            silly_rename: values[21],
+            short_read: values[22],
+            short_write: values[23],
+            delay: values[24],
+            pnfs_read: values[25],
+            pnfs_write: values[26],
+        }
+    }
+
+    /// Per-interval delta of two cumulative event samples.
+    ///
+    /// Returns `None` if any counter moved backwards — the kernel
+    /// reset the per-mount stats (remount) and no meaningful delta
+    /// exists for this interval. Mirrors the reset handling of the
+    /// per-operation delta path.
+    pub fn delta(current: &Self, previous: &Self) -> Option<Self> {
+        let cur = current.to_array();
+        let prev = previous.to_array();
+        let mut delta = [0i64; NFS_EVENTS_COUNT];
+        for i in 0..NFS_EVENTS_COUNT {
+            if cur[i] < prev[i] {
+                return None;
+            }
+            delta[i] = cur[i] - prev[i];
+        }
+        Some(Self::from_array(delta))
+    }
+}
+
 /// RPC transport statistics parsed from the `xprt:` line in
 /// `/proc/self/mountstats`.
 ///
