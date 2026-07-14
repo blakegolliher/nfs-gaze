@@ -1,5 +1,5 @@
 NAME := nfs-gaze
-VERSION := 0.1.0
+VERSION := 0.2.0
 RPM_TOPDIR := $(HOME)/rpmbuild
 BUILD_NUMBER := $(shell date +%Y%m%d%H%M%S)
 

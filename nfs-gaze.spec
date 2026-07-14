@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           nfs-gaze
-Version:        0.1.0
+Version:        0.2.0
 Release:        1.%{build_number}%{?dist}
 Summary:        Real-time NFS performance monitoring tool
 
@@ -42,6 +42,22 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/%{name}
 
 %changelog
+* Tue Jul 14 2026 Blake Golliher Sr <blakegolliher@gmail.com> - 0.2.0-1.%{build_number}
+- Correctness release: parser never aborts on unknown mountstats lines
+  (impl_id, fsc, future kernels); NFS mounts matched by exact fstype
+- nconnect mounts aggregate all transport connections instead of
+  keeping only the last xprt line
+- Prometheus counters export deltas (were cumulative re-adds); latency
+  histogram replaced by rtt/exec/queue seconds_total counter pairs
+- Report rates use measured covered time; new covered_sec field
+- -m filter honored every interval; -c N means N measured intervals
+- Whole-mount counter resets (remount) detected via age regression
+- Live mode shows transport pressure when ops stall; compare
+  distinguishes zero from missing and flags zero-baseline regressions
+- Reports carry real fstype and mount options; over-mounted paths
+  monitored at the topmost mount with a diagnostic
+- Removed dead --metrics-interval flag
+
 * Wed Oct 29 2025 Blake Golliher Sr <blakegolliher@gmail.com> - 0.1.0-1.%{build_number}
 - Initial RPM release
 - Real-time NFS performance monitoring
