@@ -190,10 +190,31 @@ impl MountstatsParser {
         }
     }
 
-    /// Flush current_mount into the mounts map
+    /// Flush current_mount into the mounts map.
+    ///
+    /// Mounts are keyed by mount point. When the same path appears
+    /// twice (an over-mount: a second NFS filesystem mounted on top
+    /// of an existing one), the kernel lists the older mount first,
+    /// so keeping the later entry means keeping the mount that is
+    /// actually visible at that path — which is what a user pointing
+    /// `-m` at the path expects to monitor. The shadowed mount's
+    /// stats are dropped, and that is worth a diagnostic: silently
+    /// last-winning looks identical to a bug when the two devices
+    /// differ.
     fn flush_current(&mut self) {
         if let Some(mount) = self.current_mount.take() {
-            self.mounts.insert(mount.mount_point.clone(), mount);
+            if let Some(shadowed) = self.mounts.insert(mount.mount_point.clone(), mount) {
+                let visible = &self.mounts[&shadowed.mount_point];
+                if visible.device != shadowed.device {
+                    warn_once(
+                        &format!("overmount:{}", shadowed.mount_point),
+                        &format!(
+                            "{} is over-mounted: monitoring {} (topmost); {} is shadowed and not monitored",
+                            shadowed.mount_point, visible.device, shadowed.device
+                        ),
+                    );
+                }
+            }
         }
     }
 
@@ -718,6 +739,35 @@ device server:/export mounted on /mnt/data with fstype nfs4 statvers=1.1
         let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
         assert_eq!(mounts.len(), 1, "only the NFS mount: {:?}", mounts.keys());
         assert!(mounts.contains_key("/mnt/data"));
+    }
+
+    #[test]
+    fn test_overmounted_path_keeps_the_topmost_mount() {
+        // The kernel lists the shadowed (older) mount first and the
+        // over-mount (the one actually visible at the path) second.
+        // The visible mount must win, and its stats must be its own —
+        // nothing from the shadowed mount may bleed through.
+        let mountstats_data = r#"device old-server:/old mounted on /mnt/data with fstype nfs statvers=1.1
+	age:	99999
+	per-op statistics
+	        READ: 500 500 0 1000 2000 5 10 15 0
+device new-server:/new mounted on /mnt/data with fstype nfs4 statvers=1.1
+	age:	60
+	per-op statistics
+	       WRITE: 7 7 0 70 140 1 2 3 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        assert_eq!(mounts.len(), 1);
+        let mount = &mounts["/mnt/data"];
+        assert_eq!(mount.device, "new-server:/new", "topmost mount must win");
+        assert_eq!(mount.fstype, "nfs4");
+        assert_eq!(mount.age, 60);
+        assert!(
+            mount.operations.contains_key("WRITE") && !mount.operations.contains_key("READ"),
+            "shadowed mount's stats must not bleed into the visible mount: {:?}",
+            mount.operations.keys()
+        );
     }
 
     #[test]
