@@ -136,6 +136,12 @@ nfs_operation_queue_seconds_total{mount_point="/mnt/nfs",server="nfs-server",ope
 > correctly weighted averages over any window. True percentiles are
 > not derivable from mountstats; use eBPF-based tooling if you need
 > them.
+>
+> The kernel also quantizes these sums to whole milliseconds, so the
+> counters advance in 0.001 steps: a burst of sub-millisecond ops can
+> contribute 0 to the sum. Averages computed over many operations
+> remain meaningful, but treat any derived latency below ~1 ms as
+> "at or below the source's resolution" rather than a precise figure.
 
 #### `nfs_operation_bytes_total`
 - **Type**: Counter

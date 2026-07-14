@@ -93,11 +93,11 @@ Track which NFS operations are experiencing high latency:
 # server:/export mounted on /mnt/nfs
 # Timestamp: 2024-01-15 14:30:45 UTC
 #
-# OP           IOPS     RTT(ms)  EXE(ms)  ERRORS
-# --------------------------------------------
-# READ         125.0    1.2ms    2.1ms    0
-# WRITE        89.0     2.3ms    4.2ms    0
-# GETATTR      450.0    0.5ms    0.7ms    0
+# OP               IOPS        RTT        EXE   ERRORS
+# ----------------------------------------------------
+# READ            125.0     1.20ms     2.10ms        0
+# WRITE            89.0     2.30ms     4.20ms        0
+# GETATTR         450.0   500.00μs   700.00μs        0
 # LOOKUP       234.0    0.8ms    1.1ms    0
 ```
 
@@ -155,7 +155,9 @@ Use during benchmarks to understand NFS behavior:
 # Monitor for a fixed wall-clock duration (seconds)
 ./nfs-gaze -m /mnt/nfs -d 300
 
-# Or by iteration count (mutually exclusive with --duration)
+# Or by measured-interval count (mutually exclusive with --duration).
+# The seed sample taken at startup is not counted, so -c 1 produces
+# exactly one measurement — handy for scripts and monitoring systems.
 ./nfs-gaze -m /mnt/nfs -i 1 -c 60
 
 # Clear screen between updates for easy reading
@@ -196,7 +198,7 @@ compatible with `nfs-gaze compare`.
 | `-m` | `--mount-point` | | Mount point to monitor (monitors all if not specified) |
 | | `--ops` | | Comma-separated list of operations to monitor |
 | `-i` | `--interval` | 1 | Update interval in seconds |
-| `-c` | `--count` | 0 | Number of iterations (0 = infinite; mutually exclusive with `-d`) |
+| `-c` | `--count` | 0 | Number of measured intervals (0 = infinite; the startup seed sample is not counted; mutually exclusive with `-d`) |
 | `-d` | `--duration` | | Total capture duration in seconds (mutually exclusive with `-c`) |
 | `-o` | `--output` | | Write a JSON snapshot report to this path at end of session (suppresses live table) |
 | | `--bw` | false | Show bandwidth statistics |
@@ -239,6 +241,16 @@ Common operations you can monitor:
 - **RTT (Round Trip Time)**: Average time from operation request to response in milliseconds
 - **EXE (Execute Time)**: Average execution time in milliseconds
 - **Errors**: Number of failed operations
+
+Note on precision: the kernel exports per-op timing in
+`/proc/self/mountstats` as *cumulative whole milliseconds*, so all
+RTT/EXE figures are millisecond-quantized at the source. An operation
+that consistently completes in under 1 ms can show an average of
+0.00 ms — that means "faster than the kernel's 1 ms resolution", not
+"free". Averages over many ops recover sub-millisecond precision
+(e.g. 0.37 ms is meaningful when thousands of ops are folded in), but
+no tool reading mountstats can report true microsecond latency for
+individual operations.
 
 ### What to Look For
 
