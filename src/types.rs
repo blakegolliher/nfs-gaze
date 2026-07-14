@@ -329,6 +329,23 @@ pub struct DeltaXprtStats {
     pub pending_per_req: f64,
 }
 
+impl DeltaXprtStats {
+    /// True when the transport did any work this interval: RPCs were
+    /// sent or received, requests entered the transport, the backlog
+    /// queue moved, or a reply arrived for an unknown XID. This is
+    /// deliberately independent of per-op completions — a mount whose
+    /// every op is stuck in flight completes nothing, but its
+    /// transport counters keep moving, and that divergence is the
+    /// stall signal.
+    pub fn has_activity(&self) -> bool {
+        self.delta_sends > 0
+            || self.delta_recvs > 0
+            || self.delta_req > 0
+            || self.delta_bklog > 0
+            || self.delta_bad_xids > 0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeltaStats {
     pub operation: String,
@@ -348,4 +365,60 @@ pub struct DeltaStats {
     pub kb_per_op: f64,
     pub kb_per_sec: f64,
     pub iops: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quiet_xprt_delta() -> DeltaXprtStats {
+        DeltaXprtStats {
+            protocol: "tcp".to_string(),
+            delta_sends: 0,
+            delta_recvs: 0,
+            delta_bad_xids: 0,
+            delta_req: 0,
+            delta_bklog: 0,
+            delta_sending: 0,
+            delta_pending: 0,
+            max_slots: 16,
+            nconnect: 1,
+            bklog_per_req: 0.0,
+            sending_per_req: 0.0,
+            pending_per_req: 0.0,
+        }
+    }
+
+    #[test]
+    fn xprt_delta_with_no_movement_has_no_activity() {
+        assert!(!quiet_xprt_delta().has_activity());
+    }
+
+    #[test]
+    fn any_moving_transport_counter_counts_as_activity() {
+        for field in ["sends", "recvs", "req", "bklog", "bad_xids"] {
+            let mut d = quiet_xprt_delta();
+            match field {
+                "sends" => d.delta_sends = 1,
+                "recvs" => d.delta_recvs = 1,
+                "req" => d.delta_req = 1,
+                "bklog" => d.delta_bklog = 1,
+                _ => d.delta_bad_xids = 1,
+            }
+            assert!(
+                d.has_activity(),
+                "delta_{field} alone must count as activity"
+            );
+        }
+    }
+
+    #[test]
+    fn slot_gauge_alone_is_not_activity() {
+        // max_slots is a carried-forward gauge, not a delta; a high
+        // watermark from earlier in the session must not make an
+        // otherwise idle interval look active.
+        let mut d = quiet_xprt_delta();
+        d.max_slots = 4096;
+        assert!(!d.has_activity());
+    }
 }

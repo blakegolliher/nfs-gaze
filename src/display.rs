@@ -113,6 +113,39 @@ pub fn display_xprt_summary<W: Write>(
     Ok(())
 }
 
+/// Render the mount header plus the xprt one-liner for an interval
+/// where the transport moved but no operation completed.
+///
+/// Normally the xprt summary rides under the per-op table and an
+/// op-idle mount stays quiet. But "ops frozen, transport churning"
+/// is the signature of a stalled mount — every RPC stuck in flight,
+/// backlog climbing — and going silent right then hides the most
+/// important signal the tool has. This renders the same header and
+/// xprt line the busy path uses, with a note in place of the op
+/// table, so a stall is visible (and grep-able) in live output.
+pub fn display_xprt_only<W: Write>(
+    writer: &mut W,
+    mount: &NFSMount,
+    delta: &DeltaXprtStats,
+    slot_cap: Option<i64>,
+    timestamp: &DateTime<Utc>,
+) -> Result<()> {
+    writeln!(writer, "{} mounted on {}", mount.device, mount.mount_point)?;
+    writeln!(
+        writer,
+        "Timestamp: {}",
+        timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+    )?;
+    writeln!(writer)?;
+    writeln!(
+        writer,
+        "no operations completed this interval; transport still active"
+    )?;
+    display_xprt_summary(writer, delta, slot_cap)?;
+    writeln!(writer)?;
+    Ok(())
+}
+
 /// Format duration with automatic unit selection.
 /// Input is in milliseconds (as reported by Linux mountstats via ktime_to_ms).
 pub fn format_duration(ms: f64) -> String {
@@ -286,6 +319,59 @@ mod tests {
         assert!(
             out.contains("slots 16/?"),
             "expected `?` placeholder for unknown cap, got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_display_xprt_only_renders_header_note_and_xprt_line() {
+        let mount = NFSMount {
+            device: "server:/export".to_string(),
+            mount_point: "/mnt/nfs".to_string(),
+            server: "server".to_string(),
+            export: "/export".to_string(),
+            age: 100,
+            operations: HashMap::new(),
+            events: None,
+            bytes_read: 0,
+            bytes_write: 0,
+            xprt: None,
+        };
+        let delta = DeltaXprtStats {
+            protocol: "tcp".to_string(),
+            delta_sends: 500,
+            delta_recvs: 0,
+            delta_bad_xids: 0,
+            delta_req: 500,
+            delta_bklog: 120,
+            delta_sending: 40,
+            delta_pending: 900,
+            max_slots: 128,
+            nconnect: 1,
+            bklog_per_req: 0.24,
+            sending_per_req: 0.08,
+            pending_per_req: 1.8,
+        };
+        let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let mut buf = Vec::<u8>::new();
+
+        display_xprt_only(&mut buf, &mount, &delta, Some(128), &timestamp).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        assert!(
+            out.contains("server:/export mounted on /mnt/nfs"),
+            "stall output must identify the mount: {out}"
+        );
+        assert!(
+            out.contains("Timestamp: 2024-01-01 12:00:00 UTC"),
+            "stall output must carry the timestamp: {out}"
+        );
+        assert!(
+            out.contains("no operations completed this interval; transport still active"),
+            "stall output must say why there is no op table: {out}"
+        );
+        assert!(
+            out.contains("xprt tcp slots 128/128"),
+            "stall output must include the xprt summary line: {out}"
         );
     }
 

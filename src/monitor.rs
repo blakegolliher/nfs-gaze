@@ -1,4 +1,4 @@
-use crate::display::{display_stats_simple, display_xprt_summary};
+use crate::display::{display_stats_simple, display_xprt_only, display_xprt_summary};
 use crate::parser::parse_mountstats;
 use crate::snapshot::{MountAggregator, MountReport, Report, CURRENT_SCHEMA_VERSION};
 use crate::stats::{
@@ -363,6 +363,14 @@ impl Monitor {
                         // op table so an idle mount stays quiet.
                         if let Some(ref x) = xprt_delta {
                             display_xprt_summary(writer, x, slot_cap)?;
+                        }
+                    } else if let Some(ref x) = xprt_delta {
+                        // No op completed, but the transport moved:
+                        // the stall case. A truly idle mount (no op
+                        // and no transport activity) still renders
+                        // nothing.
+                        if x.has_activity() {
+                            display_xprt_only(writer, current_mount, x, slot_cap, &timestamp)?;
                         }
                     }
 
@@ -891,6 +899,146 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
             mount.summary.ops_per_sec,
             mount.covered_sec,
             mount.summary.total_ops
+        );
+    }
+
+    /// Single-mount writer simulating a stalled mount: the READ op
+    /// counters are frozen (no RPC ever completes) while the
+    /// transport keeps working — sends, requests, and the backlog
+    /// queue all climb with `k`, and recvs stay flat because no
+    /// replies are coming back.
+    fn write_stalled_mount_stats(path: &std::path::Path, k: i64) {
+        let content = format!(
+            r#"device serverA:/exportA mounted on /mnt/a with fstype nfs statvers=1.1
+	age:	{age}
+	xprt:	tcp 900 1 8 0 0 {sends} 500 0 {req} {bklog} 128 4000 90000
+	per-op statistics
+	        READ: 500 500 0 66000 16384000 50 500 1000 0
+"#,
+            age = 1000 + k,
+            sends = k * 100,
+            req = k * 100,
+            bklog = k * 50,
+        );
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, content).expect("write temp mountstats");
+        std::fs::rename(&tmp, path).expect("rename mountstats into place");
+    }
+
+    /// Run the loop against a stalled mount and return (display
+    /// output, report JSON if `capture` is set).
+    fn run_loop_against_stalled_mount(capture: bool) -> (String, Option<String>) {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("create tempdir");
+        let path = dir.path().join("mountstats");
+        let report_path = dir.path().join("report.json");
+        write_stalled_mount_stats(&path, 1);
+
+        let initial_mounts = crate::parser::parse_mountstats(path.to_str().expect("utf-8 path"))
+            .expect("initial parse");
+        let monitor_mounts =
+            Monitor::get_mounts_to_monitor(Some("/mnt/a".to_string()), &initial_mounts)
+                .expect("mount filter matches");
+
+        let bump_path = path.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let bump_stop = stop.clone();
+        let bumper = thread::spawn(move || {
+            let mut k = 2;
+            while !bump_stop.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(50));
+                write_stalled_mount_stats(&bump_path, k);
+                k += 1;
+            }
+        });
+
+        let monitor = Monitor::new();
+        let mut output = Vec::<u8>::new();
+        let result = monitor.monitoring_loop(
+            &mut output,
+            MonitorConfig {
+                mountstats_path: path.to_str().expect("utf-8 path"),
+                monitor_mounts,
+                mount_point: Some("/mnt/a".to_string()),
+                operations_filter: HashSet::new(),
+                interval: Duration::from_millis(200),
+                count: 0,
+                duration: Some(Duration::from_millis(900)),
+                output: capture.then(|| report_path.clone()),
+                slot_cap: Some(128),
+                show_bandwidth: false,
+                clear_screen: false,
+                metrics_manager: None,
+            },
+        );
+        stop.store(true, Ordering::SeqCst);
+        bumper.join().expect("bumper thread");
+        result.expect("loop should exit cleanly");
+
+        let display = String::from_utf8(output).expect("display output is utf-8");
+        let json =
+            capture.then(|| std::fs::read_to_string(&report_path).expect("read report file"));
+        (display, json)
+    }
+
+    #[test]
+    fn test_live_mode_shows_xprt_pressure_when_ops_are_stalled() {
+        // Ops frozen + transport churning is the signature of a
+        // stalled mount. The pre-fix loop rendered nothing at all in
+        // that state — silent exactly when the slot-pressure signal
+        // mattered most.
+        let (output, _) = run_loop_against_stalled_mount(false);
+
+        assert!(
+            output.contains("serverA:/exportA mounted on /mnt/a"),
+            "stall intervals must identify the mount: {output}"
+        );
+        assert!(
+            output.contains("no operations completed this interval; transport still active"),
+            "stall intervals must render the stall note: {output}"
+        );
+        assert!(
+            output.contains("xprt tcp slots"),
+            "stall intervals must render the xprt summary: {output}"
+        );
+        assert!(
+            !output.lines().any(|l| l.trim_start().starts_with("READ")),
+            "no op completed, so no op rows may render: {output}"
+        );
+    }
+
+    #[test]
+    fn test_output_mode_report_carries_xprt_work_from_stalled_intervals() {
+        // Every interval in this capture is op-idle, but the
+        // transport moved. The report must still carry the xprt
+        // session totals (record_xprt is not gated on op activity)
+        // and account the covered wall-clock time.
+        let (_, json) = run_loop_against_stalled_mount(true);
+        let json = json.expect("capture mode writes a report");
+        let report: crate::snapshot::Report =
+            serde_json::from_str(&json).expect("report must be valid JSON");
+        let mount = report
+            .mounts
+            .iter()
+            .find(|m| m.mount_point == "/mnt/a")
+            .expect("report must include the monitored mount");
+
+        assert_eq!(
+            mount.summary.total_ops, 0,
+            "the op counters never moved: {json}"
+        );
+        assert!(
+            mount.covered_sec > 0.0,
+            "op-idle intervals still cover wall-clock time: {json}"
+        );
+        let xprt = mount
+            .xprt
+            .as_ref()
+            .expect("transport activity must produce an XprtReport");
+        assert!(
+            xprt.sends > 0,
+            "sends from op-idle intervals must land in the report: {json}"
         );
     }
 
