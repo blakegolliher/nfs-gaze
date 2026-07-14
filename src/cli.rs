@@ -47,7 +47,9 @@ pub struct Args {
     #[arg(short = 'i', long, default_value = "1")]
     pub interval: u64,
 
-    /// Number of iterations (0 = infinite)
+    /// Number of measured intervals (0 = infinite). The seed sample
+    /// taken at startup is not counted, so `-c 1` produces exactly
+    /// one measurement.
     #[arg(short = 'c', long, default_value = "0")]
     pub count: usize,
 

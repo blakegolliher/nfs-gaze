@@ -51,9 +51,11 @@ pub struct MonitorConfig<'a> {
     pub mount_point: Option<String>,
     pub operations_filter: HashSet<String>,
     pub interval: Duration,
-    /// Maximum iteration count (0 = unlimited). Mutually exclusive with
-    /// `duration` at the CLI layer; this struct only enforces that the
-    /// first limit to trip wins.
+    /// Maximum number of *measured* intervals (0 = unlimited). The
+    /// seed sample taken at startup is not counted, so `count: 1`
+    /// produces exactly one displayed measurement. Mutually exclusive
+    /// with `duration` at the CLI layer; this struct only enforces
+    /// that the first limit to trip wins.
     pub count: usize,
     /// Optional wall-clock termination. `None` means "no time limit".
     /// When `Some`, the loop exits once `Instant::now()` crosses the
@@ -194,7 +196,13 @@ impl Monitor {
         };
         let mut samples_collected: u64 = 0;
 
+        // `iteration` only distinguishes the seed pass from the rest;
+        // `measured_intervals` counts intervals that actually produced
+        // a measurement. `count` bounds the latter, so `-c 1` yields
+        // exactly one displayed interval instead of burning the whole
+        // count on the seed.
         let mut iteration = 0;
+        let mut measured_intervals: usize = 0;
         let loop_start = Instant::now();
         let mut last_update = loop_start;
         // Compute the wall-clock deadline once at the start of the loop
@@ -207,8 +215,8 @@ impl Monitor {
         let mut consecutive_parse_failures: u32 = 0;
 
         while self.running.load(Ordering::SeqCst) {
-            // Check if we've reached the iteration limit
-            if count > 0 && iteration >= count {
+            // Check if we've reached the measured-interval limit
+            if count > 0 && measured_intervals >= count {
                 break;
             }
 
@@ -388,6 +396,7 @@ impl Monitor {
             }
 
             iteration += 1;
+            measured_intervals += 1;
         }
 
         // Terminate the progress line with a newline so whatever
@@ -704,8 +713,14 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
     }
 
     /// Run the monitoring loop against a live-updated two-mount file
-    /// and return everything it wrote to the display writer.
-    fn run_loop_against_bumped_file(mount_point: Option<String>) -> String {
+    /// and return everything it wrote to the display writer. The file
+    /// is bumped every 50 ms so every 200 ms sampling interval is
+    /// guaranteed to observe activity on both mounts.
+    fn run_loop_against_bumped_file(
+        mount_point: Option<String>,
+        count: usize,
+        duration: Option<Duration>,
+    ) -> String {
         use tempfile::TempDir;
 
         let dir = TempDir::new().expect("create tempdir");
@@ -718,7 +733,7 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
         let bumper = thread::spawn(move || {
             let mut k = 2;
             while !bump_stop.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(50));
                 write_two_mount_stats(&bump_path, k);
                 k += 1;
             }
@@ -734,8 +749,8 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
                 mount_point,
                 operations_filter: HashSet::new(),
                 interval: Duration::from_millis(200),
-                count: 0,
-                duration: Some(Duration::from_millis(1300)),
+                count,
+                duration,
                 output: None,
                 slot_cap: Some(128),
                 show_bandwidth: false,
@@ -745,9 +760,42 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
         );
         stop.store(true, Ordering::SeqCst);
         bumper.join().expect("bumper thread");
-        result.expect("loop should exit cleanly on duration");
+        result.expect("loop should exit cleanly");
 
         String::from_utf8(output).expect("display output is utf-8")
+    }
+
+    #[test]
+    fn test_monitoring_loop_count_one_yields_one_measurement() {
+        // The README sells "-c 1" as a single measurement for
+        // monitoring systems. The seed sample must not consume the
+        // count: exactly one interval must render. The generous
+        // duration is a safety net so a regression cannot hang the
+        // test — it would fail the assertion instead.
+        let output = run_loop_against_bumped_file(
+            Some("/mnt/a".to_string()),
+            1,
+            Some(Duration::from_secs(5)),
+        );
+        let headers = output.matches(" mounted on /mnt/a").count();
+        assert_eq!(
+            headers, 1,
+            "-c 1 must render exactly one interval: {output}"
+        );
+    }
+
+    #[test]
+    fn test_monitoring_loop_count_two_yields_two_measurements() {
+        let output = run_loop_against_bumped_file(
+            Some("/mnt/a".to_string()),
+            2,
+            Some(Duration::from_secs(5)),
+        );
+        let headers = output.matches(" mounted on /mnt/a").count();
+        assert_eq!(
+            headers, 2,
+            "-c 2 must render exactly two intervals: {output}"
+        );
     }
 
     /// Single-mount mountstats writer for remount simulations: `age`
@@ -852,7 +900,11 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
         // /mnt/a may appear in the display output. The pre-fix loop
         // re-listed all mounts each interval and leaked /mnt/b from
         // the second interval onward.
-        let output = run_loop_against_bumped_file(Some("/mnt/a".to_string()));
+        let output = run_loop_against_bumped_file(
+            Some("/mnt/a".to_string()),
+            0,
+            Some(Duration::from_millis(1300)),
+        );
 
         assert!(
             output.contains("/mnt/a"),
@@ -868,7 +920,7 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
     fn test_monitoring_loop_displays_all_mounts_in_stable_order() {
         // Without -m, both active mounts appear — and in sorted order
         // within every interval, not HashMap order.
-        let output = run_loop_against_bumped_file(None);
+        let output = run_loop_against_bumped_file(None, 0, Some(Duration::from_millis(1300)));
 
         let headers: Vec<&str> = output
             .lines()
