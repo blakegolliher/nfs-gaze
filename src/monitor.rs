@@ -180,16 +180,7 @@ impl Monitor {
         let mut aggregators: HashMap<String, MountAggregator> = if output_mode {
             monitor_mounts
                 .iter()
-                .map(|m| {
-                    (
-                        m.mount_point.clone(),
-                        // fstype and options are not yet recovered by
-                        // the parser; pass empty strings for now. A
-                        // follow-up parser change can populate them
-                        // without touching this call site.
-                        MountAggregator::new(m, String::new(), String::new()),
-                    )
-                })
+                .map(|m| (m.mount_point.clone(), MountAggregator::new(m)))
                 .collect()
         } else {
             HashMap::new()
@@ -477,6 +468,8 @@ mod tests {
             mount_point: mount_point.to_string(),
             server: "test-server".to_string(),
             export: "/test".to_string(),
+            fstype: "nfs".to_string(),
+            options: String::new(),
             age: 0,
             operations: HashMap::new(),
             events: None,
@@ -683,6 +676,7 @@ mod tests {
     fn write_two_mount_stats(path: &std::path::Path, k: i64) {
         let content = format!(
             r#"device serverA:/exportA mounted on /mnt/a with fstype nfs statvers=1.1
+	opts:	rw,vers=3,proto=tcp
 	age:	{age_a}
 	bytes:	0 0 0 0 {rd_a} {wr_a} 0 0
 	xprt:	tcp 900 1 8 0 0 {x_a} {x_a} 0 {x_a} 0 4 {snd_a} {pnd_a}
@@ -882,6 +876,14 @@ device serverB:/exportB mounted on /mnt/b with fstype nfs statvers=1.1
         assert!(
             mount.covered_sec > 0.0,
             "covered_sec must reflect measured intervals: {json}"
+        );
+        assert_eq!(
+            mount.fstype, "nfs",
+            "fstype from the device line must land in the report: {json}"
+        );
+        assert_eq!(
+            mount.options, "rw,vers=3,proto=tcp",
+            "options from the opts: line must land in the report: {json}"
         );
         assert!(
             (1500.0..=2700.0).contains(&mount.summary.ops_per_sec),

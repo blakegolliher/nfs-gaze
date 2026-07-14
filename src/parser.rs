@@ -214,9 +214,7 @@ impl MountstatsParser {
             // cannot cause stats lines to bleed into the wrong mount.
             self.flush_current();
             self.in_per_op_section = false;
-            if line.contains("nfs") {
-                self.parse_device_line(line);
-            }
+            self.parse_device_line(line);
         } else if self.current_mount.is_some() {
             self.parse_stats_line(line);
         }
@@ -226,10 +224,9 @@ impl MountstatsParser {
         // Example: "device server:/export mounted on /mnt/nfs with fstype nfs statvers=1.1"
         let parts: Vec<&str> = line.splitn(2, " on ").collect();
         if parts.len() != 2 {
-            warn_once(
-                "device",
-                &format!("skipping unrecognised device line: {}", line),
-            );
+            // Not warned: /proc/self/mountstats routinely lists
+            // non-NFS filesystems whose device lines take other
+            // shapes, and they are simply not this tool's business.
             return;
         }
 
@@ -237,10 +234,20 @@ impl MountstatsParser {
         let mount_info: Vec<&str> = parts[1].split_whitespace().collect();
 
         if device_info.len() < 2 || mount_info.is_empty() {
-            warn_once(
-                "device",
-                &format!("skipping unrecognised device line: {}", line),
-            );
+            return;
+        }
+
+        // Only the NFS *client* filesystem types are ours. Matching
+        // must be exact: substring checks catch `fstype nfsd` (the
+        // server-side export filesystem, present on any NFS server)
+        // and arbitrary mounts whose path merely contains "nfs".
+        let fstype = mount_info
+            .iter()
+            .position(|&w| w == "fstype")
+            .and_then(|i| mount_info.get(i + 1))
+            .copied()
+            .unwrap_or("");
+        if fstype != "nfs" && fstype != "nfs4" {
             return;
         }
 
@@ -257,6 +264,8 @@ impl MountstatsParser {
             mount_point: mount_point.to_string(),
             server,
             export,
+            fstype: fstype.to_string(),
+            options: String::new(),
             age: 0,
             operations: HashMap::new(),
             events: None,
@@ -277,10 +286,14 @@ impl MountstatsParser {
             self.parse_bytes(line);
         } else if line.starts_with("xprt:") {
             self.parse_xprt(line);
+        } else if let Some(opts) = line.strip_prefix("opts:") {
+            if let Some(ref mut mount) = self.current_mount {
+                mount.options = opts.trim().to_string();
+            }
         } else if self.in_per_op_section && line.contains(':') {
             self.parse_operation(line);
         }
-        // Anything else — opts:, caps:, sec:, impl_id:, nfsv4:, fsc:,
+        // Anything else — caps:, sec:, impl_id:, nfsv4:, fsc:,
         // "RPC iostats version:", blank lines, and whatever future
         // kernels add — is metadata this tool does not consume, and is
         // ignored without ceremony. Only lines inside the per-op
@@ -652,6 +665,59 @@ bytes: 0 0 183766089728 152135794688 183766089728 152135794688 0 0
         let mount = &mounts["/mnt/nfs"];
         assert_eq!(mount.bytes_read, 183766089728);
         assert_eq!(mount.bytes_write, 152135794688);
+    }
+
+    #[test]
+    fn test_fstype_and_options_are_captured() {
+        let mountstats_data = r#"device server:/export mounted on /mnt/nfs with fstype nfs4 statvers=1.1
+	opts:	rw,vers=4.2,rsize=1048576,wsize=1048576,hard,proto=tcp
+	age:	500
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        let mount = &mounts["/mnt/nfs"];
+        assert_eq!(mount.fstype, "nfs4");
+        assert_eq!(
+            mount.options,
+            "rw,vers=4.2,rsize=1048576,wsize=1048576,hard,proto=tcp"
+        );
+    }
+
+    #[test]
+    fn test_nfsd_export_filesystem_is_not_a_mount() {
+        // Every NFS *server* has "device nfsd mounted on /proc/fs/nfsd
+        // with fstype nfsd" in its mountstats. The old substring check
+        // (`line.contains("nfs")`) treated it as a client mount and
+        // monitored garbage. fstype matching must be exact.
+        let mountstats_data = r#"device nfsd mounted on /proc/fs/nfsd with fstype nfsd
+device server:/export mounted on /mnt/data with fstype nfs statvers=1.1
+	age:	100
+	per-op statistics
+	        READ: 10 10 0 100 200 1 2 3 0
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        assert_eq!(
+            mounts.len(),
+            1,
+            "only the client mount: {:?}",
+            mounts.keys()
+        );
+        assert!(mounts.contains_key("/mnt/data"));
+    }
+
+    #[test]
+    fn test_non_nfs_mount_with_nfs_in_path_is_not_a_mount() {
+        // An ext4 volume mounted at a path that happens to contain
+        // "nfs" also fooled the substring check.
+        let mountstats_data = r#"device /dev/sdb1 mounted on /mnt/nfsbackup with fstype ext4
+device server:/export mounted on /mnt/data with fstype nfs4 statvers=1.1
+	age:	100
+"#;
+        let cursor = Cursor::new(mountstats_data);
+        let mounts = parse_mountstats_reader(cursor).expect("Should parse mountstats");
+        assert_eq!(mounts.len(), 1, "only the NFS mount: {:?}", mounts.keys());
+        assert!(mounts.contains_key("/mnt/data"));
     }
 
     #[test]

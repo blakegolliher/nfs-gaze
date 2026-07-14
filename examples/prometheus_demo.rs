@@ -53,6 +53,8 @@ fn main() {
                     mount_point: "/mnt/demo".to_string(),
                     server: "demo-server".to_string(),
                     export: "/export".to_string(),
+                    fstype: "nfs4".to_string(),
+                    options: "rw,vers=4.2,proto=tcp".to_string(),
                     age: 12345,
                     operations,
                     events: None,

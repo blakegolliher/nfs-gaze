@@ -867,6 +867,8 @@ mod tests {
             mount_point: "/mnt/nfs".to_string(),
             server: "server".to_string(),
             export: "/export".to_string(),
+            fstype: "nfs".to_string(),
+            options: String::new(),
             age: 12345,
             operations,
             events: Some(NFSEvents::default()),

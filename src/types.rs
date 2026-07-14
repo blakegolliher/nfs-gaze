@@ -269,6 +269,13 @@ pub struct NFSMount {
     pub mount_point: String,
     pub server: String,
     pub export: String,
+    /// Filesystem type token from the device line (`nfs` or `nfs4`).
+    /// The parser only creates mounts for those two types, so this is
+    /// never empty on a parsed mount.
+    pub fstype: String,
+    /// Mount options from the `opts:` line (e.g. `rw,vers=3,proto=tcp`).
+    /// Empty if the kernel did not emit one.
+    pub options: String,
     pub age: i64,
     pub operations: HashMap<String, NFSOperation>,
     pub events: Option<NFSEvents>,

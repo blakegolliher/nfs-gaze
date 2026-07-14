@@ -237,16 +237,16 @@ struct XprtAccumulator {
 }
 
 impl MountAggregator {
-    /// Start a new aggregator for the given mount. `fstype` and
-    /// `options` are accepted as caller-supplied strings rather than
-    /// read from `mount` because [`NFSMount`] does not yet parse them
-    /// from `/proc/self/mountstats`; pass empty strings if unknown.
-    pub fn new(mount: &NFSMount, fstype: String, options: String) -> Self {
+    /// Start a new aggregator for the given mount. Identity fields —
+    /// including fstype and mount options — are carried over from the
+    /// parsed mount so the finalised report describes the mount as
+    /// the kernel reported it at session start.
+    pub fn new(mount: &NFSMount) -> Self {
         Self {
             device: mount.device.clone(),
             mount_point: mount.mount_point.clone(),
-            fstype,
-            options,
+            fstype: mount.fstype.clone(),
+            options: mount.options.clone(),
             covered_seconds: 0.0,
             ops: HashMap::new(),
             xprt: None,
@@ -547,6 +547,8 @@ mod tests {
             mount_point: "/mnt/nfs".to_string(),
             server: "server".to_string(),
             export: "/export".to_string(),
+            fstype: "nfs4".to_string(),
+            options: "rw,vers=4.1".to_string(),
             age: 0,
             operations: HashMap::new(),
             events: None,
@@ -588,7 +590,7 @@ mod tests {
     #[test]
     fn aggregator_sums_totals_across_samples() {
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, "nfs4".into(), "rw,vers=4.1".into());
+        let mut agg = MountAggregator::new(&mount);
 
         // Three intervals: (100 ops, 100ms rtt), (200 ops, 240ms rtt), (50 ops, 30ms rtt)
         // Ops-weighted mean RTT = (100+240+30) / (100+200+50) = 370/350 ≈ 1.057ms
@@ -616,7 +618,7 @@ mod tests {
     #[test]
     fn aggregator_tracks_per_interval_rtt_min_and_max() {
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
 
         // Per-interval averages: 1.0, 5.0, 0.5 → min 0.5, max 5.0
         agg.record(&[delta("READ", 10, 10, 0, 0)], 1.0); // avg 1.0
@@ -636,7 +638,7 @@ mod tests {
         // defend in depth). It should not appear in the operations
         // list but the summary totals should still be consistent.
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
 
         agg.record(
             &[delta("READ", 100, 50, 0, 0), delta("GETATTR", 0, 0, 0, 0)],
@@ -655,7 +657,7 @@ mod tests {
         // rates over all ten seconds. Idle intervals carry an empty
         // sample but real elapsed time.
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record(&[delta("READ", 100, 50, 0, 0)], 1.0);
         for _ in 0..9 {
             agg.record(&[], 1.0);
@@ -676,7 +678,7 @@ mod tests {
         // Intervals rarely last exactly the nominal -i value; the
         // denominator must be the sum of what was measured.
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record(&[delta("READ", 100, 50, 0, 0)], 1.05);
         agg.record(&[delta("READ", 100, 50, 0, 0)], 1.10);
         agg.record(&[delta("READ", 100, 50, 0, 0)], 0.85);
@@ -700,7 +702,7 @@ mod tests {
         assert_eq!(old.mounts[0].covered_sec, 0.0);
 
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record(&[delta("READ", 10, 5, 0, 0)], 2.5);
         let report = agg.finalise(None);
         let json = serde_json::to_string(&report).expect("serialise");
@@ -713,7 +715,7 @@ mod tests {
     #[test]
     fn aggregator_handles_zero_covered_time_without_dividing_by_zero() {
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record(&[delta("READ", 50, 25, 0, 0)], 0.0);
 
         let report = agg.finalise(None);
@@ -730,7 +732,7 @@ mod tests {
         // name. The aggregator must not conflate the two counters
         // when building the report.
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record(&[delta("READ", 100, 50, 3, 7)], 1.0);
 
         let report = agg.finalise(None);
@@ -743,7 +745,7 @@ mod tests {
     #[test]
     fn aggregator_sorts_operations_by_ops_descending() {
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record(
             &[
                 delta("GETATTR", 500, 250, 0, 0),
@@ -801,7 +803,7 @@ mod tests {
         // Second: 500 req, bklog 100, sending 500. Session-weighted
         // bklog/req = 100 / 1500 = 0.0666..., sending/req = 1000/1500 = 0.6666...
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record_xprt(&xprt_delta(1000, 1000, 0, 500, 100, 16));
         agg.record_xprt(&xprt_delta(500, 500, 100, 500, 200, 32));
 
@@ -831,7 +833,7 @@ mod tests {
         // would be misleading (would look like "no slot pressure")
         // so the distinction is load-bearing.
         let mount = test_mount();
-        let agg = MountAggregator::new(&mount, String::new(), String::new());
+        let agg = MountAggregator::new(&mount);
         let report = agg.finalise(Some(65536));
         assert!(report.xprt.is_none());
 
@@ -850,7 +852,7 @@ mod tests {
         // it drops the sample rather than polluting the accumulator
         // with values from a different transport.
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         agg.record_xprt(&xprt_delta(1000, 1000, 0, 500, 100, 16));
         // Second delta with a different protocol tag:
         let mut bogus = xprt_delta(9999, 9999, 9999, 9999, 9999, 9999);
@@ -916,7 +918,7 @@ mod tests {
     #[test]
     fn aggregator_carries_nconnect_into_report() {
         let mount = test_mount();
-        let mut agg = MountAggregator::new(&mount, String::new(), String::new());
+        let mut agg = MountAggregator::new(&mount);
         let mut delta = xprt_delta(1000, 1000, 0, 500, 100, 16);
         delta.nconnect = 16;
         agg.record_xprt(&delta);
@@ -928,13 +930,13 @@ mod tests {
     #[test]
     fn aggregator_empty_session_produces_empty_report() {
         let mount = test_mount();
-        let agg = MountAggregator::new(&mount, "nfs4".into(), "rw".into());
+        let agg = MountAggregator::new(&mount);
         let report = agg.finalise(None);
 
         assert_eq!(report.summary.total_ops, 0);
         assert_eq!(report.summary.ops_per_sec, 0.0);
         assert!(report.operations.is_empty());
         assert_eq!(report.fstype, "nfs4");
-        assert_eq!(report.options, "rw");
+        assert_eq!(report.options, "rw,vers=4.1");
     }
 }

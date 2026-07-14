@@ -61,6 +61,8 @@ fn create_test_mount(device: &str, mount_point: &str) -> NFSMount {
         mount_point: mount_point.to_string(),
         server: "test-server".to_string(),
         export: "/test/export".to_string(),
+        fstype: "nfs".to_string(),
+        options: String::new(),
         age: 3600,
         operations,
         events: Some(NFSEvents {
