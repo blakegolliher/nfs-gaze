@@ -102,13 +102,16 @@ pub fn print_comparison<W: Write>(
     let ordered = union_ops_by_total(&m1.operations, &m2.operations);
 
     // Latency: lower is better. Two decimal places matches
-    // display.rs's format_duration for ms values.
+    // display.rs's format_duration for ms values. Presence is
+    // decided by whether the op exists in the report, NOT by the
+    // value being non-zero: mountstats quantizes RTT to whole
+    // milliseconds, so a fast op legitimately averages 0.00 ms.
     writeln!(w, "Latency (RTT avg in ms, lower is better)")?;
     write_op_header(w, label1, label2)?;
     for name in &ordered {
-        let v1 = ops1.get(name.as_str()).map(|o| o.rtt_avg_ms).unwrap_or(0.0);
-        let v2 = ops2.get(name.as_str()).map(|o| o.rtt_avg_ms).unwrap_or(0.0);
-        write_compare_row(w, name, v1, v2, label1, label2, true, 2)?;
+        let v1 = ops1.get(name.as_str()).map(|o| o.rtt_avg_ms);
+        let v2 = ops2.get(name.as_str()).map(|o| o.rtt_avg_ms);
+        write_metric_row(w, name, v1, v2, label1, label2, true, 2)?;
     }
     writeln!(w)?;
 
@@ -117,15 +120,9 @@ pub fn print_comparison<W: Write>(
     writeln!(w, "Throughput (ops/sec, higher is better)")?;
     write_op_header(w, label1, label2)?;
     for name in &ordered {
-        let v1 = ops1
-            .get(name.as_str())
-            .map(|o| o.ops_per_sec)
-            .unwrap_or(0.0);
-        let v2 = ops2
-            .get(name.as_str())
-            .map(|o| o.ops_per_sec)
-            .unwrap_or(0.0);
-        write_compare_row(w, name, v1, v2, label1, label2, false, 1)?;
+        let v1 = ops1.get(name.as_str()).map(|o| o.ops_per_sec);
+        let v2 = ops2.get(name.as_str()).map(|o| o.ops_per_sec);
+        write_metric_row(w, name, v1, v2, label1, label2, false, 1)?;
     }
     writeln!(w)?;
 
@@ -195,34 +192,35 @@ fn write_xprt_section<W: Write>(
     };
     write_summary_i64_row(w, &slot_label, x1.max_slots, x2.max_slots)?;
 
-    // Per-request pressure averages: lower is better. A ratio of
-    // zero on both sides skips the row entirely — there was no slot
-    // pressure on either capture and the row would carry no signal.
-    write_summary_f64_row(
+    // Per-request pressure averages: lower is better. Zero is the
+    // healthy value here, so "0.000 on one side, non-zero on the
+    // other" is exactly the regression (or improvement) this
+    // section exists to flag — the zero side wins the row.
+    write_metric_row(
         w,
         "bklog/req",
-        x1.bklog_per_req,
-        x2.bklog_per_req,
+        Some(x1.bklog_per_req),
+        Some(x2.bklog_per_req),
         label1,
         label2,
         true,
         3,
     )?;
-    write_summary_f64_row(
+    write_metric_row(
         w,
         "sending/req",
-        x1.sending_per_req,
-        x2.sending_per_req,
+        Some(x1.sending_per_req),
+        Some(x2.sending_per_req),
         label1,
         label2,
         true,
         2,
     )?;
-    write_summary_f64_row(
+    write_metric_row(
         w,
         "pending/req",
-        x1.pending_per_req,
-        x2.pending_per_req,
+        Some(x1.pending_per_req),
+        Some(x2.pending_per_req),
         label1,
         label2,
         true,
@@ -248,11 +246,11 @@ fn write_summary<W: Write>(
     )?;
     writeln!(w, "{}", "-".repeat(TABLE_WIDTH))?;
 
-    write_summary_f64_row(
+    write_metric_row(
         w,
         "Ops/sec",
-        m1.summary.ops_per_sec,
-        m2.summary.ops_per_sec,
+        Some(m1.summary.ops_per_sec),
+        Some(m2.summary.ops_per_sec),
         label1,
         label2,
         false,
@@ -277,46 +275,6 @@ fn write_op_header<W: Write>(w: &mut W, label1: &str, label2: &str) -> io::Resul
     Ok(())
 }
 
-// Both write_*_row helpers carry one argument more than clippy's
-// default cutoff. Each arg is load-bearing and the natural grouping
-// (labels + style + numeric precision) would not actually collapse
-// into a cohesive struct without adding a layer of noise at every
-// call site. Acking the lint here is the simpler choice.
-#[allow(clippy::too_many_arguments)]
-fn write_summary_f64_row<W: Write>(
-    w: &mut W,
-    name: &str,
-    v1: f64,
-    v2: f64,
-    label1: &str,
-    label2: &str,
-    lower_is_better: bool,
-    precision: usize,
-) -> io::Result<()> {
-    if v1 > 0.0 && v2 > 0.0 {
-        let ratio = v2 / v1;
-        let better = compare_better(ratio, label1, label2, lower_is_better);
-        writeln!(
-            w,
-            "{:<18} {:>12.*} {:>12.*} {:>10} {:>14}",
-            name,
-            precision,
-            v1,
-            precision,
-            v2,
-            format_ratio(ratio),
-            better
-        )?;
-    } else {
-        writeln!(
-            w,
-            "{:<18} {:>12.*} {:>12.*} {:>10} {:>14}",
-            name, precision, v1, precision, v2, "-", "-"
-        )?;
-    }
-    Ok(())
-}
-
 fn write_summary_i64_row<W: Write>(w: &mut W, name: &str, v1: i64, v2: i64) -> io::Result<()> {
     writeln!(
         w,
@@ -326,49 +284,72 @@ fn write_summary_i64_row<W: Write>(w: &mut W, name: &str, v1: i64, v2: i64) -> i
     Ok(())
 }
 
-/// Render one row of a per-operation comparison table. Handles the
-/// three cases separately so ops present on only one side are not
-/// dropped silently — a missing side shows `-` and suppresses the
-/// ratio/winner columns.
+/// Render one comparison row where either side may be absent.
+///
+/// `None` means the metric does not exist on that side (the op never
+/// appeared in that report) and renders as `-`. `Some(0.0)` is a real
+/// measurement — mountstats quantizes latency to whole milliseconds,
+/// so sub-ms ops legitimately average 0.00, and zero backlog is the
+/// healthy transport state — and renders as a number.
+///
+/// The Ratio column needs both sides non-zero to be meaningful.
+/// The Better column only needs both sides *present*: when exactly
+/// one side is zero the winner is still decidable (the zero side for
+/// lower-is-better metrics, the non-zero side for higher-is-better),
+/// and this is precisely the "baseline was clean, new run is not"
+/// case a comparison exists to flag.
+//
+// One argument more than clippy's default cutoff; each is
+// load-bearing and grouping them into a struct would just add noise
+// at every call site.
 #[allow(clippy::too_many_arguments)]
-fn write_compare_row<W: Write>(
+fn write_metric_row<W: Write>(
     w: &mut W,
     name: &str,
-    v1: f64,
-    v2: f64,
+    v1: Option<f64>,
+    v2: Option<f64>,
     label1: &str,
     label2: &str,
     lower_is_better: bool,
     precision: usize,
 ) -> io::Result<()> {
-    if v1 > 0.0 && v2 > 0.0 {
-        let ratio = v2 / v1;
-        let better = compare_better(ratio, label1, label2, lower_is_better);
-        writeln!(
-            w,
-            "{:<18} {:>12.*} {:>12.*} {:>10} {:>14}",
-            name,
-            precision,
-            v1,
-            precision,
-            v2,
-            format_ratio(ratio),
-            better
-        )?;
-    } else if v1 > 0.0 {
-        writeln!(
-            w,
-            "{:<18} {:>12.*} {:>12} {:>10} {:>14}",
-            name, precision, v1, "-", "-", "-"
-        )?;
-    } else if v2 > 0.0 {
-        writeln!(
-            w,
-            "{:<18} {:>12} {:>12.*} {:>10} {:>14}",
-            name, "-", precision, v2, "-", "-"
-        )?;
-    }
-    // Both zero → the op never ran in either session; skip entirely.
+    let fmt = |v: Option<f64>| match v {
+        Some(v) => format!("{:.*}", precision, v),
+        None => "-".to_string(),
+    };
+    let (ratio, better) = match (v1, v2) {
+        (Some(a), Some(b)) if a > 0.0 && b > 0.0 => {
+            let ratio = b / a;
+            (
+                format_ratio(ratio),
+                compare_better(ratio, label1, label2, lower_is_better),
+            )
+        }
+        (Some(a), Some(b)) if a == 0.0 && b == 0.0 => ("-".to_string(), "=".to_string()),
+        (Some(a), Some(_b)) => {
+            // Exactly one side is zero. No finite ratio, but a clear
+            // winner: zero wins lower-is-better metrics, the non-zero
+            // side wins higher-is-better ones.
+            let zero_side_wins = lower_is_better;
+            let first_is_zero = a == 0.0;
+            let winner = if zero_side_wins == first_is_zero {
+                label1
+            } else {
+                label2
+            };
+            ("-".to_string(), winner.to_string())
+        }
+        _ => ("-".to_string(), "-".to_string()),
+    };
+    writeln!(
+        w,
+        "{:<18} {:>12} {:>12} {:>10} {:>14}",
+        name,
+        fmt(v1),
+        fmt(v2),
+        ratio,
+        better
+    )?;
     Ok(())
 }
 
@@ -676,6 +657,123 @@ mod tests {
         assert!(
             !out.contains("RPC Transport"),
             "xprt section should be skipped when one side lacks data: {out}"
+        );
+    }
+
+    #[test]
+    fn quantized_zero_latency_renders_as_a_value_not_missing() {
+        // mountstats quantizes RTT to whole ms, so a fast op can
+        // average exactly 0.00 across a session. That is a real
+        // measurement (and the best possible one) — it must render
+        // as 0.00 with the zero side winning the latency row, not
+        // as "-" pretending the op never ran.
+        let mut buf = Vec::<u8>::new();
+        write_metric_row(
+            &mut buf,
+            "GETATTR",
+            Some(0.0),
+            Some(0.8),
+            "OLD",
+            "NEW",
+            true,
+            2,
+        )
+        .expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+
+        assert!(out.contains("0.00"), "zero side must render 0.00: {out}");
+        assert!(out.contains("0.80"), "non-zero side must render: {out}");
+        assert!(
+            out.trim_end().ends_with("OLD"),
+            "0.00ms beats 0.80ms — the zero side wins lower-is-better: {out}"
+        );
+    }
+
+    #[test]
+    fn zero_baseline_regression_is_flagged_not_dashed() {
+        // "Baseline had zero backlog, new run has 0.1/req" is the
+        // exact regression the xprt section exists to catch. The
+        // Better column must name the clean side.
+        let mut buf = Vec::<u8>::new();
+        write_metric_row(
+            &mut buf,
+            "bklog/req",
+            Some(0.0),
+            Some(0.1),
+            "A",
+            "B",
+            true,
+            3,
+        )
+        .expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+        assert!(
+            out.trim_end().ends_with('A'),
+            "the zero-backlog side must be flagged as better: {out}"
+        );
+
+        // And the mirror image: the regression was fixed.
+        let mut buf = Vec::<u8>::new();
+        write_metric_row(
+            &mut buf,
+            "bklog/req",
+            Some(0.1),
+            Some(0.0),
+            "A",
+            "B",
+            true,
+            3,
+        )
+        .expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+        assert!(
+            out.trim_end().ends_with('B'),
+            "the newly-clean side must be flagged as better: {out}"
+        );
+    }
+
+    #[test]
+    fn zero_throughput_side_loses_higher_is_better() {
+        let mut buf = Vec::<u8>::new();
+        write_metric_row(&mut buf, "READ", Some(0.0), Some(50.0), "A", "B", false, 1)
+            .expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+        assert!(
+            out.trim_end().ends_with('B'),
+            "the side doing work wins higher-is-better: {out}"
+        );
+    }
+
+    #[test]
+    fn both_zero_renders_equal_with_no_ratio() {
+        let mut buf = Vec::<u8>::new();
+        write_metric_row(
+            &mut buf,
+            "bklog/req",
+            Some(0.0),
+            Some(0.0),
+            "A",
+            "B",
+            true,
+            3,
+        )
+        .expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+        assert!(
+            out.trim_end().ends_with('='),
+            "both clean → equal, not a dash: {out}"
+        );
+    }
+
+    #[test]
+    fn missing_side_renders_dash_and_no_winner() {
+        let mut buf = Vec::<u8>::new();
+        write_metric_row(&mut buf, "CLOSE", Some(0.4), None, "A", "B", true, 2).expect("render");
+        let out = String::from_utf8(buf).expect("utf-8");
+        assert!(out.contains("0.40"), "present side renders: {out}");
+        assert!(
+            out.trim_end().ends_with('-'),
+            "absent side cannot produce a winner: {out}"
         );
     }
 
